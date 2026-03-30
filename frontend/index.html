@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AIAD 数据整理</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 24px; background: #f5f7fb; }
+      .container { max-width: 1100px; margin: 0 auto; }
+      .card { background: #fff; border-radius: 10px; padding: 16px; margin-top: 16px; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+      .grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 16px; }
+      label { display: block; font-weight: 600; margin-top: 10px; }
+      input, select { width: 100%; padding: 8px; margin-top: 6px; }
+      button { margin-top: 14px; padding: 10px 16px; background: #2563eb; color: #fff; border: none; border-radius: 8px; cursor: pointer; }
+      pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+      .status { font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>AIAD 社媒数据整理</h1>
+      <div class="card">
+        <label>广告类型（必填）</label>
+        <input id="adType" placeholder="例如：护肤精华" />
+        <label>检索关键词（可选，逗号分隔）</label>
+        <input id="keywords" placeholder="例如：敏感肌,修护,熬夜" />
+        <label>平台</label>
+        <select id="platform"><option value="xhs">xhs</option></select>
+        <label>抓取上限</label>
+        <input id="limit" type="number" value="20" />
+        <label>时间范围（可选）</label>
+        <input id="timeRange" placeholder="例如：2025-01-01~2025-12-31" />
+        <button id="runBtn">开始整理</button>
+        <div class="status" id="taskStatus">任务状态：未开始</div>
+        <div id="errorText"></div>
+      </div>
+      <div class="grid">
+        <div class="card"><h3>数据概览</h3><pre id="summary"></pre></div>
+        <div class="card"><h3>内容表</h3><pre id="contentTable"></pre></div>
+        <div class="card"><h3>评论表</h3><pre id="commentTable"></pre></div>
+        <div class="card"><h3>特征表</h3><pre id="featureTable"></pre></div>
+      </div>
+    </div>
+    <script src="/static/main.js"></script>
+  </body>
+</html>

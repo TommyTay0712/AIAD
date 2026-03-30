@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.conda/
+.env
+data/raw/
+data/processed/
+data/tasks.json
+logs/
+*.pyc
