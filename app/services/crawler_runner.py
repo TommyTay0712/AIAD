@@ -27,6 +27,16 @@ class CrawlerRunResult:
     error_message: str = ""
 
 
+def _build_mediacrawler_bootstrap_script() -> str:
+    return (
+        "import runpy, sys, config\n"
+        "config.CRAWLER_MAX_NOTES_COUNT = int(sys.argv[1])\n"
+        "config.ENABLE_GET_MEIDAS = sys.argv[2].lower() in ('1','true','yes','y')\n"
+        "sys.argv = ['main.py'] + sys.argv[3:]\n"
+        "runpy.run_module('main', run_name='__main__')\n"
+    )
+
+
 def _detect_login_required(stdout: str, stderr: str) -> bool:
     """识别登录失效场景。"""
     merged = f"{stdout}\n{stderr}".lower()
@@ -192,9 +202,7 @@ def run_crawler(
     started_at = datetime.now().timestamp()
     result: subprocess.CompletedProcess[str] | None = None
     for login_type in ("cookie", "qrcode"):
-        command = [
-            str(settings.mediacrawler_python_exe),
-            "main.py",
+        cli_args = [
             "--platform",
             platform,
             "--lt",
@@ -203,18 +211,22 @@ def run_crawler(
             "search",
             "--keywords",
             ",".join(keywords),
-            "--max_notes_count",
-            str(limit),
             "--max_comments_count_singlenotes",
             str(max_comments_per_note),
-            "--enable_get_meidas",
-            "true" if enable_media_download else "false",
             "--save_data_option",
             "jsonl",
             "--headless",
             "false",
             "--save_data_path",
             str(run_output_dir),
+        ]
+        command = [
+            str(settings.mediacrawler_python_exe),
+            "-c",
+            _build_mediacrawler_bootstrap_script(),
+            str(limit),
+            "true" if enable_media_download else "false",
+            *cli_args,
         ]
         logger.info(
             "开始执行爬虫 task_id=%s login_type=%s command=%s",

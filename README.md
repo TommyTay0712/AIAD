@@ -20,6 +20,28 @@ AIAD/
 
 ## 启动方式（Conda）
 
+### 0) 克隆仓库（包含 vendor 子仓）
+
+首次克隆请使用：
+
+```bash
+git clone --recurse-submodules https://github.com/TommyTay0712/AIAD.git
+```
+
+如果已经克隆过主仓库，请执行一次：
+
+```bash
+git submodule sync --recursive
+git submodule update --init --recursive
+```
+
+后续更新主仓库后，也建议执行：
+
+```bash
+git pull --rebase
+git submodule update --init --recursive
+```
+
 ### 1) AIAD 后端 + 前端（同一个服务）
 
 说明：前端是 Vue 单页，由 FastAPI 静态托管，所以只需要启动一个服务。
@@ -98,7 +120,15 @@ E:\AIAD\.conda\mediacrawler\python.exe main.py --platform xhs --lt qrcode --type
 请求体：
 
 ```json
-{"ad_type":"","keywords":[],"platform":"xhs","limit":20,"time_range":""}
+{
+  "ad_type": "",
+  "keywords": [],
+  "platform": "xhs",
+  "limit": 20,
+  "max_comments_per_note": 10,
+  "enable_media_download": false,
+  "time_range": ""
+}
 ```
 
 返回：
