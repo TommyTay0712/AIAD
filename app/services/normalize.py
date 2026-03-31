@@ -69,6 +69,31 @@ def read_jsonl(file_path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def parse_media_urls(value: Any) -> list[str]:
+    text = clean_text(value)
+    if not text:
+        return []
+    return [item.strip() for item in text.split(",") if item.strip()]
+
+
+def collect_media_paths(media_root_dir: Path | None, note_id: str) -> tuple[list[str], list[str]]:
+    if not media_root_dir:
+        return ([], [])
+    image_dir = media_root_dir / "images" / note_id
+    video_dir = media_root_dir / "videos" / note_id
+    image_paths = (
+        sorted(str(path.resolve()) for path in image_dir.glob("*") if path.is_file())
+        if image_dir.exists()
+        else []
+    )
+    video_paths = (
+        sorted(str(path.resolve()) for path in video_dir.glob("*") if path.is_file())
+        if video_dir.exists()
+        else []
+    )
+    return (image_paths, video_paths)
+
+
 def _topic_cluster(text: str) -> str:
     if any(token in text for token in ["护肤", "成分", "敏感"]):
         return "beauty_care"
@@ -141,6 +166,7 @@ def normalize_dataset(
     source_keyword: str,
     content_file: Path,
     comment_file: Path | None,
+    media_root_dir: Path | None = None,
 ) -> dict[str, Any]:
     """将爬虫原始数据转换为标准化数据表。"""
     raw_contents = read_jsonl(content_file)
@@ -174,6 +200,15 @@ def normalize_dataset(
             "note_url": clean_text(row.get("note_url") or row.get("url")),
             "source_keyword": source_keyword,
         }
+        image_urls = parse_media_urls(row.get("image_list"))
+        video_urls = parse_media_urls(row.get("video_url") or row.get("video_download_url"))
+        image_paths, video_paths = collect_media_paths(media_root_dir, note_id)
+        item["image_urls"] = image_urls
+        item["video_urls"] = video_urls
+        item["image_local_paths"] = image_paths
+        item["video_local_paths"] = video_paths
+        item["media_local_paths"] = image_paths + video_paths
+        item["has_media"] = bool(image_urls or video_urls or image_paths or video_paths)
         content_table.append(item)
 
     comment_table: list[dict[str, Any]] = []
@@ -246,6 +281,9 @@ def normalize_dataset(
         "content_count": len(content_table),
         "comment_count": len(comment_table),
         "feature_count": len(feature_table),
+        "media_note_count": len([row for row in content_table if row.get("has_media")]),
+        "image_file_count": sum(len(row.get("image_local_paths", [])) for row in content_table),
+        "video_file_count": sum(len(row.get("video_local_paths", [])) for row in content_table),
     }
     return {
         "summary": summary,

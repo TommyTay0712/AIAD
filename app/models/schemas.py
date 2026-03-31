@@ -27,6 +27,8 @@ class RunRequest(BaseModel):
     keywords: list[str] = Field(default_factory=list)
     platform: str = Field(default="xhs")
     limit: int = Field(default=20, ge=1, le=200)
+    max_comments_per_note: int = Field(default=10, ge=1, le=200)
+    enable_media_download: bool = Field(default=False)
     time_range: str = Field(default="")
 
     @field_validator("keywords")
