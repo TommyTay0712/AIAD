@@ -44,3 +44,9 @@ class TaskStore:
         if not raw:
             return None
         return TaskRecord.model_validate(raw)
+
+    def list_recent(self, limit: int = 10) -> list[TaskRecord]:
+        payload = self._read_all()
+        records = [TaskRecord.model_validate(item) for item in payload.values()]
+        records.sort(key=lambda record: record.updated_at, reverse=True)
+        return records[: max(1, limit)]

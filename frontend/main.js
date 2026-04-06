@@ -1,20 +1,17 @@
-async function fetchTask(taskId) {
-  const response = await fetch(`/api/ad-intel/task/${taskId}`);
-  return response.json();
-}
-
-async function fetchTaskMeta(taskId) {
-  const response = await fetch(`/api/ad-intel/task/${taskId}/meta`);
-  return response.json();
+async function requestJson(url, options) {
+  const response = await fetch(url, options);
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(typeof data === "object" ? JSON.stringify(data) : String(data));
+  }
+  return data;
 }
 
 async function waitTaskDone(taskId, onPoll, maxAttempts = 180, sleepMs = 3000) {
   for (let i = 0; i < maxAttempts; i += 1) {
-    const task = await fetchTask(taskId);
+    const task = await requestJson(`/api/ad-intel/task/${taskId}`);
     if (onPoll) onPoll(i + 1, task.status || "success");
-    if (!task.status || task.status === "success" || task.status === "failed") {
-      return task;
-    }
+    if (!task.status || task.status === "success" || task.status === "failed") return task;
     await new Promise((resolve) => setTimeout(resolve, sleepMs));
   }
   throw new Error("任务等待超时，请稍后再试");
@@ -25,10 +22,23 @@ const { createApp } = Vue;
 createApp({
   data() {
     return {
+      stitchProjectId: "15597441123141010762",
+      navItems: [
+        { key: "campaign", label: "Campaigns", icon: "rocket_launch" },
+        { key: "progress", label: "AI Analysis", icon: "psychology" },
+        { key: "analytics", label: "Analytics", icon: "leaderboard" },
+        { key: "review", label: "Review Queue", icon: "rate_review" },
+      ],
+      activeScreen: "campaign",
+      globalFilter: "",
       adType: "",
       keywords: "",
-      postLimit: 20,
-      commentsPerPostLimit: 12,
+      valueProposition: "",
+      industry: "美妆护肤",
+      campaignTone: "专业",
+      tones: ["专业", "自然", "锋利"],
+      postLimit: 120,
+      commentsPerPostLimit: 20,
       enableMediaDownload: false,
       isRunning: false,
       taskStatusText: "未开始",
@@ -36,62 +46,46 @@ createApp({
       taskId: "",
       pollCount: 0,
       elapsedSeconds: 0,
-      processedFile: "",
-      chromaCounts: {},
-      taskMeta: {},
+      startedAtMs: 0,
       summary: {},
       contentTable: [],
       commentTable: [],
       featureTable: [],
-      startedAtMs: 0,
+      reviewQueue: [],
+      progressStep: { current: 1, total: 4, label: "Initialization", percent: 0 },
+      progressMetrics: { posts_scanned: 0, comments_read: 0 },
+      progressLogs: [],
+      analyticsKpis: { comment_count: 0, content_count: 0, dispatch_efficiency: 0, completed_tasks: 0 },
+      analyticsTopics: [],
+      sentimentBars: [],
+      analyticsInsight: "等待任务数据生成洞察。",
+      taskMeta: {},
     };
   },
   computed: {
-    statusClass() {
-      if (this.taskStatusText === "成功") return "badge-success";
-      if (this.taskStatusText === "失败") return "badge-failed";
-      return "badge-running";
+    activeScreenTitle() {
+      const mapping = {
+        campaign: "Campaign Setup",
+        review: "Ad Review & Dispatch",
+        progress: "Analysis Progress",
+        analytics: "Analytics Dashboard",
+      };
+      return mapping[this.activeScreen] || "Campaign Setup";
     },
-    noteCards() {
-      const perPostLimit = Number(this.commentsPerPostLimit) > 0 ? Number(this.commentsPerPostLimit) : 12;
-      const contentMap = new Map(this.contentTable.map((item) => [item.note_id, item]));
-      const featureMap = new Map(this.featureTable.map((item) => [item.note_id, item]));
-      const grouped = new Map();
-      for (const comment of this.commentTable) {
-        if (!grouped.has(comment.note_id)) grouped.set(comment.note_id, []);
-        grouped.get(comment.note_id).push(comment);
-      }
-      return Array.from(grouped.entries())
-        .map(([noteId, comments]) => {
-          const content = contentMap.get(noteId) || {};
-          const feature = featureMap.get(noteId) || {};
-          return {
-            noteId,
-            title: content.title || "未获取到标题",
-            desc: content.desc || "",
-            authorName: content.author_name || "未知作者",
-            noteUrl: content.note_url || "",
-            topicCluster: feature.topic_cluster || "general",
-            adFitScore: feature.ad_fit_score ?? "",
-            comments: comments.slice(0, perPostLimit),
-            totalComments: comments.length,
-          };
-        })
-        .sort((a, b) => b.totalComments - a.totalComments);
+    aiHintText() {
+      if (!this.adType) return "请先输入广告主题，系统会根据关键词密度自动评估抓取深度。";
+      return `当前策略将围绕“${this.adType}”在${this.postLimit}条帖子和每帖${this.commentsPerPostLimit}条评论范围内构建语义投放线索。`;
+    },
+    filteredReviewQueue() {
+      const query = this.globalFilter.trim().toLowerCase();
+      if (!query) return this.reviewQueue;
+      return this.reviewQueue.filter((item) => {
+        const haystack = `${item.source_text} ${item.ad_text} ${item.author} ${item.focus}`.toLowerCase();
+        return haystack.includes(query);
+      });
     },
   },
   methods: {
-    pretty(value) {
-      return JSON.stringify(value, null, 2);
-    },
-    commentAnalysisPlaceholder(comment) {
-      const text = String(comment.comment_text || "");
-      if (!text) return "待补充分析";
-      if (text.includes("贵") || text.includes("价格")) return "价格敏感倾向，建议补充价格锚点";
-      if (text.includes("好吃") || text.includes("喜欢")) return "正向反馈，适合作为卖点素材";
-      if (text.includes("一般") || text.includes("不好")) return "存在负向信号，建议排查具体痛点";
-      return "待补充分析";
-    },
     parseKeywords() {
       if (!this.keywords) return [this.adType];
       const parsed = this.keywords
@@ -109,6 +103,22 @@ createApp({
       if (!this.startedAtMs) return;
       this.elapsedSeconds = Math.max(0, Math.round((Date.now() - this.startedAtMs) / 1000));
     },
+    async loadInsights() {
+      if (!this.taskId) return;
+      try {
+        const insights = await requestJson(`/api/ad-intel/task/${this.taskId}/insights`);
+        this.reviewQueue = insights.review_queue || [];
+        this.progressStep = insights.progress?.step || this.progressStep;
+        this.progressMetrics = insights.progress?.metrics || this.progressMetrics;
+        this.progressLogs = insights.progress?.logs || [];
+        this.analyticsKpis = insights.analytics?.kpis || this.analyticsKpis;
+        this.sentimentBars = insights.analytics?.sentiment_bars || [];
+        this.analyticsTopics = insights.analytics?.topic_cloud || [];
+        this.analyticsInsight = insights.analytics?.insight || this.analyticsInsight;
+      } catch (error) {
+        this.errorText = String(error);
+      }
+    },
     async runTask() {
       if (!this.adType) return;
       this.errorText = "";
@@ -117,13 +127,12 @@ createApp({
       this.taskId = "";
       this.pollCount = 0;
       this.elapsedSeconds = 0;
-      this.processedFile = "";
-      this.chromaCounts = {};
-      this.taskMeta = {};
       this.summary = {};
       this.contentTable = [];
       this.commentTable = [];
       this.featureTable = [];
+      this.reviewQueue = [];
+      this.progressLogs = [];
       this.startedAtMs = Date.now();
       const timer = setInterval(() => this.updateElapsed(), 1000);
       try {
@@ -131,37 +140,26 @@ createApp({
           ad_type: this.adType,
           keywords: this.parseKeywords(),
           platform: "xhs",
-          limit: this.normalizePositiveInt(this.postLimit, 20),
-          max_comments_per_note: this.normalizePositiveInt(this.commentsPerPostLimit, 10),
+          limit: this.normalizePositiveInt(this.postLimit, 120),
+          max_comments_per_note: this.normalizePositiveInt(this.commentsPerPostLimit, 20),
           enable_media_download: this.enableMediaDownload,
           time_range: "",
         };
-        const runResp = await fetch("/api/ad-intel/run", {
+        const runData = await requestJson("/api/ad-intel/run", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        const runData = await runResp.json();
-        if (!runResp.ok) {
-          this.taskStatusText = "失败";
-          this.errorText = JSON.stringify(runData);
-          return;
-        }
         this.taskId = runData.task_id || "";
-        const task = await waitTaskDone(
-          this.taskId,
-          (count, status) => {
-            this.pollCount = count;
-            if (status === "running") this.taskStatusText = "运行中";
-          },
-        );
-        const meta = await fetchTaskMeta(this.taskId);
+        const task = await waitTaskDone(this.taskId, (count, status) => {
+          this.pollCount = count;
+          if (status === "running") this.taskStatusText = "运行中";
+        });
+        const meta = await requestJson(`/api/ad-intel/task/${this.taskId}/meta`);
         this.taskMeta = meta;
-        this.processedFile = meta.processed_file || "";
-        this.chromaCounts = meta.chroma_counts || {};
         if (task.status && task.status !== "success") {
           this.taskStatusText = "失败";
-          this.errorText = task.message || "";
+          this.errorText = task.message || "任务失败";
           return;
         }
         this.taskStatusText = "成功";
@@ -169,9 +167,12 @@ createApp({
         this.contentTable = task.content_table || [];
         this.commentTable = task.comment_table || [];
         this.featureTable = task.feature_table || [];
+        await this.loadInsights();
+        this.activeScreen = "review";
       } catch (error) {
         this.taskStatusText = "失败";
         this.errorText = String(error);
+        this.activeScreen = "progress";
       } finally {
         clearInterval(timer);
         this.updateElapsed();
