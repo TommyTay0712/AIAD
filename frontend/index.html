@@ -1,46 +1,310 @@
-<!doctype html>
-<html lang="zh-CN">
+<!DOCTYPE html>
+<html class="light" lang="zh-CN">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AIAD 数据整理</title>
+    <meta charset="utf-8" />
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <title>小红书评论广告助手</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+    <script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              primary: "#003c73",
+              "primary-container": "#00539c",
+              secondary: "#006b5c",
+              "secondary-container": "#68fadd",
+              surface: "#f7f9fb",
+              "surface-container-low": "#f2f4f6",
+              "surface-container-lowest": "#ffffff",
+              "surface-container-high": "#e6e8ea",
+              "surface-container-highest": "#e0e3e5",
+              "on-surface": "#191c1e",
+              "on-surface-variant": "#424751",
+              "tertiary-container": "#465272",
+              "on-tertiary-container": "#bac6ec",
+              error: "#ba1a1a",
+              "outline-variant": "#c2c6d3"
+            },
+            fontFamily: {
+              headline: ["Manrope"],
+              body: ["Inter"]
+            }
+          }
+        }
+      };
+    </script>
     <style>
-      body { font-family: Arial, sans-serif; margin: 24px; background: #f5f7fb; }
-      .container { max-width: 1100px; margin: 0 auto; }
-      .card { background: #fff; border-radius: 10px; padding: 16px; margin-top: 16px; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
-      .grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 16px; }
-      label { display: block; font-weight: 600; margin-top: 10px; }
-      input, select { width: 100%; padding: 8px; margin-top: 6px; }
-      button { margin-top: 14px; padding: 10px 16px; background: #2563eb; color: #fff; border: none; border-radius: 8px; cursor: pointer; }
-      pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; }
-      .status { font-weight: 700; }
+      .material-symbols-outlined { font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24; }
+      .active-fill { font-variation-settings: "FILL" 1, "wght" 600, "GRAD" 0, "opsz" 24; }
+      .signature-gradient { background: linear-gradient(135deg, #003c73 0%, #00539c 100%); }
+      .glass-panel { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(24px); }
     </style>
   </head>
-  <body>
-    <div class="container">
-      <h1>AIAD 社媒数据整理</h1>
-      <div class="card">
-        <label>广告类型（必填）</label>
-        <input id="adType" placeholder="例如：护肤精华" />
-        <label>检索关键词（可选，逗号分隔）</label>
-        <input id="keywords" placeholder="例如：敏感肌,修护,熬夜" />
-        <label>平台</label>
-        <select id="platform"><option value="xhs">xhs</option></select>
-        <label>抓取上限</label>
-        <input id="limit" type="number" value="20" />
-        <label>时间范围（可选）</label>
-        <input id="timeRange" placeholder="例如：2025-01-01~2025-12-31" />
-        <button id="runBtn">开始整理</button>
-        <div class="status" id="taskStatus">任务状态：未开始</div>
-        <div id="errorText"></div>
-      </div>
-      <div class="grid">
-        <div class="card"><h3>数据概览</h3><pre id="summary"></pre></div>
-        <div class="card"><h3>内容表</h3><pre id="contentTable"></pre></div>
-        <div class="card"><h3>评论表</h3><pre id="commentTable"></pre></div>
-        <div class="card"><h3>特征表</h3><pre id="featureTable"></pre></div>
-      </div>
+  <body class="bg-surface font-body text-on-surface">
+    <div id="app">
+      <aside class="fixed left-0 top-0 bottom-0 z-40 w-64 bg-slate-100 border-r border-slate-200/50 flex flex-col text-sm">
+        <div class="p-8">
+          <h1 class="text-xl font-headline font-extrabold text-blue-900">Precision Architect</h1>
+          <p class="text-xs text-on-surface-variant/80 mt-1">小红书评论广告助手</p>
+        </div>
+        <nav class="flex-1 px-4 space-y-1">
+          <button v-for="nav in navItems" :key="nav.key" @click="activeScreen = nav.key" class="w-full flex items-center gap-3 px-4 py-3 text-left rounded-xl transition-all duration-200"
+            :class="activeScreen === nav.key ? 'text-blue-800 font-bold border-r-4 border-blue-800 bg-white/60' : 'text-slate-600 hover:text-blue-700 hover:bg-slate-200/50'">
+            <span class="material-symbols-outlined" :class="activeScreen === nav.key ? 'active-fill' : ''">{{ nav.icon }}</span>
+            <span>{{ nav.label }}</span>
+          </button>
+        </nav>
+        <div class="p-4 mt-auto space-y-2">
+          <button class="w-full signature-gradient text-white py-3 rounded-xl font-semibold flex items-center justify-center gap-2" @click="activeScreen = 'campaign'">
+            <span class="material-symbols-outlined text-sm">add</span>
+            新建任务
+          </button>
+          <div class="px-2 pt-2 text-xs text-on-surface-variant">Stitch Project: {{ stitchProjectId }}</div>
+        </div>
+      </aside>
+
+      <main class="ml-64 min-h-screen">
+        <header class="h-16 flex justify-between items-center px-8 w-full border-b border-slate-200/50 bg-slate-50 sticky top-0 z-30">
+          <div class="flex items-center gap-3">
+            <h2 class="text-lg font-headline font-bold text-primary">{{ activeScreenTitle }}</h2>
+            <span class="px-2 py-1 rounded-full bg-secondary-container/40 text-secondary text-xs font-semibold">{{ taskStatusText }}</span>
+          </div>
+          <div class="flex items-center gap-4">
+            <div class="relative">
+              <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-lg">search</span>
+              <input class="pl-10 pr-4 py-2 bg-slate-100 rounded-full border-none focus:ring-2 focus:ring-primary/20 w-72 text-sm" placeholder="搜索任务、评论、关键词..." v-model.trim="globalFilter" />
+            </div>
+            <span class="text-xs text-on-surface-variant">TaskID: {{ taskId || "未生成" }}</span>
+          </div>
+        </header>
+
+        <section class="p-12 max-w-7xl mx-auto space-y-10" v-if="activeScreen === 'campaign'">
+          <div class="flex justify-between items-end">
+            <div>
+              <h3 class="text-4xl font-headline font-extrabold text-primary tracking-tight">Campaign Configuration</h3>
+              <p class="text-on-surface-variant mt-2">按 Stitch 的 Campaign Setup 结构配置抓取与投放策略。</p>
+            </div>
+            <div class="flex gap-3">
+              <button class="px-6 py-2.5 rounded-xl bg-surface-container-highest text-on-surface font-semibold">保存草稿</button>
+              <button class="px-8 py-2.5 rounded-xl signature-gradient text-white font-bold flex items-center gap-2 disabled:opacity-60" @click="runTask" :disabled="isRunning || !adType">
+                <span class="material-symbols-outlined text-sm">auto_awesome</span>
+                {{ isRunning ? "分析中..." : "Start AI Analysis" }}
+              </button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-12 gap-8">
+            <div class="col-span-7 space-y-8">
+              <div class="bg-surface-container-lowest p-8 rounded-xl shadow-sm">
+                <h4 class="font-headline text-xl font-bold text-primary mb-6">Product Identity</h4>
+                <div class="space-y-6">
+                  <div>
+                    <label class="block text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-2">广告主题</label>
+                    <input class="w-full bg-surface-container-low border-none rounded-xl px-4 py-4 focus:ring-2 focus:ring-secondary/20" v-model.trim="adType" placeholder="例如：高端护肤精华" />
+                  </div>
+                  <div>
+                    <label class="block text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-2">价值主张</label>
+                    <textarea class="w-full bg-surface-container-low border-none rounded-xl px-4 py-4 focus:ring-2 focus:ring-secondary/20 resize-none" rows="4" v-model.trim="valueProposition" placeholder="写出广告策略亮点"></textarea>
+                  </div>
+                </div>
+              </div>
+
+              <div class="bg-surface-container-lowest p-8 rounded-xl shadow-sm">
+                <h4 class="font-headline text-xl font-bold text-primary mb-6">Audience Targeting</h4>
+                <div class="grid grid-cols-2 gap-6">
+                  <div>
+                    <label class="block text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-2">行业</label>
+                    <select class="w-full bg-surface-container-low border-none rounded-xl px-4 py-4 focus:ring-2 focus:ring-secondary/20" v-model="industry">
+                      <option>美妆护肤</option>
+                      <option>本地生活</option>
+                      <option>母婴亲子</option>
+                      <option>运动健康</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-2">语气风格</label>
+                    <div class="flex p-1 bg-surface-container-low rounded-xl">
+                      <button v-for="tone in tones" :key="tone" class="flex-1 py-3 text-sm rounded-lg" :class="campaignTone === tone ? 'bg-surface-container-lowest shadow-sm font-semibold' : 'text-on-surface-variant'" @click="campaignTone = tone">{{ tone }}</button>
+                    </div>
+                  </div>
+                  <div class="col-span-2">
+                    <label class="block text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-2">关键词</label>
+                    <input class="w-full bg-surface-container-low border-none rounded-xl px-4 py-4 focus:ring-2 focus:ring-secondary/20" v-model.trim="keywords" placeholder="多个关键词用逗号分隔" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="col-span-5 space-y-8">
+              <div class="bg-primary text-white p-8 rounded-xl shadow-xl space-y-8">
+                <h4 class="font-headline text-xl font-bold">Scraping Parameters</h4>
+                <div>
+                  <div class="flex justify-between items-end mb-3">
+                    <label class="text-xs font-bold uppercase tracking-widest opacity-70">帖子抓取量</label>
+                    <span class="text-3xl font-headline font-extrabold text-secondary-container">{{ postLimit }}</span>
+                  </div>
+                  <input class="w-full" type="range" min="20" max="300" v-model.number="postLimit" />
+                </div>
+                <div>
+                  <div class="flex justify-between items-end mb-3">
+                    <label class="text-xs font-bold uppercase tracking-widest opacity-70">每帖评论深度</label>
+                    <span class="text-3xl font-headline font-extrabold text-secondary-container">{{ commentsPerPostLimit }}</span>
+                  </div>
+                  <input class="w-full" type="range" min="5" max="80" v-model.number="commentsPerPostLimit" />
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                  <label class="bg-white/10 p-3 rounded-lg border border-white/20 flex items-center justify-between"><span class="text-sm">小红书</span><input type="checkbox" checked disabled /></label>
+                  <label class="bg-white/10 p-3 rounded-lg border border-white/20 flex items-center justify-between"><span class="text-sm">下载媒体</span><input type="checkbox" v-model="enableMediaDownload" /></label>
+                </div>
+              </div>
+
+              <div class="bg-surface-container-low p-8 rounded-xl">
+                <h4 class="font-headline text-lg font-bold text-primary">Contextual AI Insight</h4>
+                <p class="text-sm text-on-surface-variant mt-2 italic">{{ aiHintText }}</p>
+                <div class="mt-5 grid grid-cols-2 gap-3 text-sm">
+                  <div class="bg-surface-container-lowest rounded-xl p-4">
+                    <div class="text-xs text-on-surface-variant">任务轮询</div>
+                    <div class="text-xl font-bold text-primary mt-1">{{ pollCount }} 次</div>
+                  </div>
+                  <div class="bg-surface-container-lowest rounded-xl p-4">
+                    <div class="text-xs text-on-surface-variant">耗时</div>
+                    <div class="text-xl font-bold text-primary mt-1">{{ elapsedSeconds }} 秒</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-if="errorText" class="bg-red-50 text-red-700 border border-red-200 rounded-xl px-4 py-3 text-sm">{{ errorText }}</div>
+        </section>
+
+        <section class="p-12 max-w-7xl mx-auto space-y-6" v-if="activeScreen === 'review'">
+          <div class="flex justify-between items-end">
+            <div>
+              <p class="text-secondary font-bold text-xs uppercase tracking-widest">Pending Approval</p>
+              <h3 class="font-headline text-3xl font-extrabold text-primary">Review Queue</h3>
+              <p class="text-on-surface-variant mt-2">对 AI 生成文案进行审核并派发。</p>
+            </div>
+            <div class="flex gap-3">
+              <button class="px-5 py-2.5 bg-surface-container-highest rounded-xl text-sm font-semibold">批量驳回</button>
+              <button class="px-5 py-2.5 signature-gradient text-white rounded-xl text-sm font-semibold">全部通过 ({{ filteredReviewQueue.length }})</button>
+            </div>
+          </div>
+          <div class="space-y-4">
+            <div v-for="item in filteredReviewQueue" :key="item.comment_id" class="bg-surface-container-lowest rounded-xl p-6 flex flex-col md:flex-row gap-6">
+              <div class="flex-1 space-y-3">
+                <div class="text-xs text-on-surface-variant">{{ item.author }} · {{ item.platform }}</div>
+                <div class="bg-surface-container-low p-4 rounded-xl text-sm italic">{{ item.source_text }}</div>
+              </div>
+              <div class="flex-[1.5] space-y-3">
+                <div class="flex justify-between items-center">
+                  <span class="px-3 py-1 bg-tertiary-container text-on-tertiary-container rounded-full text-[10px] font-bold uppercase">AI Suggested Ad</span>
+                  <span class="text-xs text-secondary font-bold">{{ item.predicted_affinity }}% Affinity</span>
+                </div>
+                <div class="bg-primary/5 p-4 rounded-xl text-sm">{{ item.ad_text }}</div>
+                <div class="text-xs text-on-surface-variant">投放方向：{{ item.focus }}</div>
+              </div>
+              <div class="flex items-center">
+                <button class="w-12 h-12 rounded-full signature-gradient text-white flex items-center justify-center">
+                  <span class="material-symbols-outlined active-fill">send</span>
+                </button>
+              </div>
+            </div>
+            <div v-if="filteredReviewQueue.length === 0" class="bg-surface-container-lowest rounded-xl p-8 text-on-surface-variant">暂无可审核评论，请先运行 Campaign。</div>
+          </div>
+        </section>
+
+        <section class="p-12 max-w-7xl mx-auto space-y-8" v-if="activeScreen === 'progress'">
+          <div class="flex justify-between items-end">
+            <div>
+              <p class="text-secondary font-bold text-xs uppercase tracking-widest">Ongoing Processing</p>
+              <h3 class="text-4xl font-headline font-extrabold text-primary">Active Neural Analysis</h3>
+              <p class="text-on-surface-variant mt-2">实时显示抓取、整理、分析进度。</p>
+            </div>
+            <div class="flex gap-4">
+              <div class="bg-surface-container-lowest p-4 rounded-xl w-44">
+                <div class="text-xs text-on-surface-variant uppercase">Posts Scanned</div>
+                <div class="text-2xl font-black text-primary mt-1">{{ progressMetrics.posts_scanned }}</div>
+              </div>
+              <div class="bg-surface-container-lowest p-4 rounded-xl w-44">
+                <div class="text-xs text-on-surface-variant uppercase">Comments Read</div>
+                <div class="text-2xl font-black text-secondary mt-1">{{ progressMetrics.comments_read }}</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="bg-surface-container-low rounded-xl p-1">
+            <div class="bg-surface-container-lowest rounded-xl p-10">
+              <div class="text-center space-y-5">
+                <div class="inline-flex items-center gap-2 px-3 py-1 bg-secondary-container/30 rounded-full text-xs font-bold uppercase">Step {{ progressStep.current }} of {{ progressStep.total }}: {{ progressStep.label }}</div>
+                <div class="text-6xl font-black text-primary">{{ progressStep.percent }}<span class="text-2xl opacity-50">%</span></div>
+                <div class="w-full max-w-3xl mx-auto">
+                  <div class="h-2 bg-surface-container-highest rounded-full overflow-hidden">
+                    <div class="h-full bg-gradient-to-r from-primary to-secondary transition-all duration-500" :style="{ width: `${progressStep.percent}%` }"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="mt-8 bg-surface-container-low rounded-xl p-5">
+                <div class="text-xs font-bold text-primary uppercase mb-3">Live Processing Log</div>
+                <div class="space-y-2 text-xs text-on-surface-variant font-mono">
+                  <div v-for="line in progressLogs" :key="line">{{ line }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="p-12 max-w-7xl mx-auto space-y-8" v-if="activeScreen === 'analytics'">
+          <div>
+            <span class="text-secondary font-bold text-xs uppercase tracking-widest bg-secondary-container/20 px-3 py-1 rounded-full">Report: 实时分析</span>
+            <h3 class="text-4xl font-headline font-extrabold text-primary mt-4">Analytics Dashboard</h3>
+            <p class="text-on-surface-variant mt-2">按 Stitch 风格重做的数据驾驶舱。</p>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <div class="bg-surface-container-lowest p-6 rounded-xl">
+              <p class="text-on-surface-variant text-xs uppercase mb-2">总评论数</p>
+              <h4 class="text-3xl font-headline font-extrabold text-primary">{{ analyticsKpis.comment_count }}</h4>
+            </div>
+            <div class="bg-surface-container-lowest p-6 rounded-xl">
+              <p class="text-on-surface-variant text-xs uppercase mb-2">分析帖子数</p>
+              <h4 class="text-3xl font-headline font-extrabold text-primary">{{ analyticsKpis.content_count }}</h4>
+            </div>
+            <div class="md:col-span-2 signature-gradient p-6 rounded-xl text-white">
+              <p class="text-xs uppercase opacity-70 mb-2">Ad Insertion Efficiency</p>
+              <h4 class="text-3xl font-headline font-extrabold">{{ analyticsKpis.dispatch_efficiency }}%</h4>
+              <p class="text-sm mt-3 opacity-80">任务已完成 {{ analyticsKpis.completed_tasks }} 次，当前状态：{{ taskStatusText }}</p>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <div class="lg:col-span-7 bg-surface-container-lowest p-8 rounded-xl">
+              <div class="flex justify-between items-center mb-5">
+                <h4 class="text-xl font-headline font-bold text-primary">Topic Frequency</h4>
+                <button class="bg-surface-container-low p-2 rounded-lg text-slate-500"><span class="material-symbols-outlined">filter_list</span></button>
+              </div>
+              <div class="min-h-[280px] flex flex-wrap gap-x-6 gap-y-3 items-center justify-center">
+                <span v-for="tag in analyticsTopics" :key="tag.word" :class="tag.className">{{ tag.word }}</span>
+              </div>
+            </div>
+            <div class="lg:col-span-5 bg-surface-container-low p-8 rounded-xl">
+              <h4 class="text-xl font-headline font-bold text-primary">Sentiment Index</h4>
+              <div class="space-y-5 mt-6">
+                <div v-for="bar in sentimentBars" :key="bar.label" class="space-y-2">
+                  <div class="flex justify-between text-xs font-bold text-on-surface-variant"><span>{{ bar.label }}</span><span>{{ bar.value }}%</span></div>
+                  <div class="h-2 bg-surface-container-highest rounded-full overflow-hidden"><div class="h-full" :class="bar.colorClass" :style="{ width: `${bar.value}%` }"></div></div>
+                </div>
+              </div>
+              <div class="mt-8 pt-6 border-t border-outline-variant/20 text-sm text-on-surface-variant italic">“{{ analyticsInsight }}”</div>
+            </div>
+          </div>
+        </section>
+      </main>
     </div>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <script src="/static/main.js"></script>
   </body>
 </html>

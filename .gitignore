@@ -7,6 +7,10 @@ __pycache__/
 .env
 data/raw/
 data/processed/
+data/chroma/
 data/tasks.json
 logs/
 *.pyc
+.ms-playwright/
+stitch_/
+frontend/stitch_assets/

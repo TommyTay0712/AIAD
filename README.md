@@ -18,31 +18,74 @@ AIAD/
 └─ scripts/dev.ps1         # 一键开发启动脚本
 ```
 
-## 启动方式
+## 启动方式（Conda）
 
-1. 安装依赖：
+### 0) 克隆仓库（包含 vendor 子仓）
 
-```bash
-python -m pip install -r requirements.txt
-```
-
-2. 启动服务：
+首次克隆请使用：
 
 ```bash
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+git clone --recurse-submodules https://github.com/TommyTay0712/AIAD.git
 ```
 
-3. 打开页面：
+如果已经克隆过主仓库，请执行一次：
+
+```bash
+git submodule sync --recursive
+git submodule update --init --recursive
+```
+
+后续更新主仓库后，也建议执行：
+
+```bash
+git pull --rebase
+git submodule update --init --recursive
+```
+
+### 1) AIAD 后端 + 前端（同一个服务）
+
+说明：前端是 Vue 单页，由 FastAPI 静态托管，所以只需要启动一个服务。
+
+安装依赖：
+
+```bash
+E:\AIAD\.conda\aiad\python.exe -m pip install -r requirements.txt
+```
+
+启动服务：
+
+```bash
+E:\AIAD\.conda\aiad\python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+```
+
+访问页面：
 
 ```text
 http://127.0.0.1:8000/
+```
+
+### 2) MediaCrawler 独立环境（仅调试时手动运行）
+
+安装 MediaCrawler 依赖：
+
+```bash
+E:\AIAD\.conda\mediacrawler\python.exe -m pip install -r requirements.txt
+```
+
+二维码登录抓取示例：
+
+```bash
+set PLAYWRIGHT_BROWSERS_PATH=E:\AIAD\.ms-playwright
+E:\AIAD\.conda\mediacrawler\python.exe main.py --platform xhs --lt qrcode --type search --keywords 美食 --headless false --save_data_option jsonl --save_data_path E:\AIAD\data\raw\xhs_real
 ```
 
 ## 开发框架
 
 - 后端：FastAPI
 - 工作流：LangGraph（当前仅编排数据整理节点，不启用AI分析）
-- 前端：原生 HTML + JS（最小可用页面）
+- 数据库：ChromaDB（先用于高并发写入与特征数据检索验证）
+- 前端：Vue 3（CDN 版本，单页）
 
 ## 环境变量说明
 
@@ -51,8 +94,25 @@ http://127.0.0.1:8000/
 - `MEDIA_CRAWLER_DIR`：MediaCrawler 路径
 - `CRAWLER_OUTPUT_DIR`：原始数据目录
 - `PROCESSED_OUTPUT_DIR`：处理结果目录
+- `CHROMA_PERSIST_DIR`：ChromaDB 持久化目录
+- `MEDIACRAWLER_PYTHON_EXE`：MediaCrawler Python 解释器路径
+- `PLAYWRIGHT_BROWSERS_PATH`：Playwright 浏览器目录
 - `LOGS_DIR`：日志目录
 - `TASK_STORE_FILE`：任务状态文件
+
+## MediaCrawler 运行说明
+
+建议使用项目内可写浏览器目录：
+
+```bash
+set PLAYWRIGHT_BROWSERS_PATH=E:\AIAD\.ms-playwright
+```
+
+非无头二维码登录示例：
+
+```bash
+E:\AIAD\.conda\mediacrawler\python.exe main.py --platform xhs --lt qrcode --type search --keywords 美食 --headless false --save_data_option jsonl --save_data_path E:\AIAD\data\raw\xhs_real
+```
 
 ## 接口说明
 
@@ -61,13 +121,21 @@ http://127.0.0.1:8000/
 请求体：
 
 ```json
-{"ad_type":"","keywords":[],"platform":"xhs","limit":20,"time_range":""}
+{
+  "ad_type": "",
+  "keywords": [],
+  "platform": "xhs",
+  "limit": 20,
+  "max_comments_per_note": 10,
+  "enable_media_download": false,
+  "time_range": ""
+}
 ```
 
 返回：
 
 ```json
-{"task_id":"...","status":"success","message":"data/processed/...json"}
+{"task_id":"...","status":"running","message":"任务已提交，正在抓取并整理数据"}
 ```
 
 失败时返回：
