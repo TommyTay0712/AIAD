@@ -20,19 +20,7 @@ AIAD/
 
 ## 启动方式（Conda）
 
-### 0) 环境约定
-
-- AIAD 主工程使用独立 Conda 前缀环境：`.conda/aiad`
-- MediaCrawler 使用独立 Conda 前缀环境：`.conda/mediacrawler`
-- Playwright 浏览器统一下载到项目目录：`.ms-playwright`
-- macOS/Linux 默认解释器路径：
-  - AIAD: `.conda/aiad/bin/python`
-  - MediaCrawler: `.conda/mediacrawler/bin/python`
-- Windows 默认解释器路径：
-  - AIAD: `.conda/aiad/python.exe`
-  - MediaCrawler: `.conda/mediacrawler/python.exe`
-
-### 1) 克隆仓库（包含 vendor 子仓）
+### 0) 克隆仓库（包含 vendor 子仓）
 
 首次克隆请使用：
 
@@ -54,30 +42,21 @@ git pull --rebase
 git submodule update --init --recursive
 ```
 
-### 2) 初始化 Conda 环境
-
-macOS/Linux 推荐直接执行：
-
-```bash
-bash scripts/setup_conda_envs.sh
-```
-
-如果当前机器还没有 `conda`，可以先安装 Miniforge：
-
-```bash
-brew install --cask miniforge
-```
-
-Windows 可继续使用项目内前缀环境，分别创建 `.conda/aiad` 与 `.conda/mediacrawler`。
-
-### 3) AIAD 后端 + 前端（同一个服务）
+### 1) AIAD 后端 + 前端（同一个服务）
 
 说明：前端是 Vue 单页，由 FastAPI 静态托管，所以只需要启动一个服务。
+
+安装依赖：
+
+```bash
+E:\AIAD\.conda\aiad\python.exe -m pip install -r requirements.txt
+```
 
 启动服务：
 
 ```bash
-./.conda/aiad/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+E:\AIAD\.conda\aiad\python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
 ```
 
 访问页面：
@@ -86,19 +65,19 @@ Windows 可继续使用项目内前缀环境，分别创建 `.conda/aiad` 与 `.
 http://127.0.0.1:8000/
 ```
 
-### 4) MediaCrawler 独立环境（仅调试时手动运行）
+### 2) MediaCrawler 独立环境（仅调试时手动运行）
 
 安装 MediaCrawler 依赖：
 
 ```bash
-./.conda/mediacrawler/bin/python -m pip install -r vendor/MediaCrawler/requirements.txt
+E:\AIAD\.conda\mediacrawler\python.exe -m pip install -r requirements.txt
 ```
 
 二维码登录抓取示例：
 
 ```bash
-cd vendor/MediaCrawler
-PLAYWRIGHT_BROWSERS_PATH="$PWD/../../.ms-playwright" ../../.conda/mediacrawler/bin/python main.py --platform xhs --lt qrcode --type search --keywords 美食 --headless false --save_data_option jsonl --save_data_path "$PWD/../../data/raw/xhs_real"
+set PLAYWRIGHT_BROWSERS_PATH=E:\AIAD\.ms-playwright
+E:\AIAD\.conda\mediacrawler\python.exe main.py --platform xhs --lt qrcode --type search --keywords 美食 --headless false --save_data_option jsonl --save_data_path E:\AIAD\data\raw\xhs_real
 ```
 
 ## 开发框架
@@ -126,14 +105,13 @@ PLAYWRIGHT_BROWSERS_PATH="$PWD/../../.ms-playwright" ../../.conda/mediacrawler/b
 建议使用项目内可写浏览器目录：
 
 ```bash
-export PLAYWRIGHT_BROWSERS_PATH="$(pwd)/.ms-playwright"
+set PLAYWRIGHT_BROWSERS_PATH=E:\AIAD\.ms-playwright
 ```
 
 非无头二维码登录示例：
 
 ```bash
-cd vendor/MediaCrawler
-../../.conda/mediacrawler/bin/python main.py --platform xhs --lt qrcode --type search --keywords 美食 --headless false --save_data_option jsonl --save_data_path "$PWD/../../data/raw/xhs_real"
+E:\AIAD\.conda\mediacrawler\python.exe main.py --platform xhs --lt qrcode --type search --keywords 美食 --headless false --save_data_option jsonl --save_data_path E:\AIAD\data\raw\xhs_real
 ```
 
 ## 接口说明
