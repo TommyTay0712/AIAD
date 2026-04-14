@@ -5,10 +5,8 @@ __pycache__/
 .ruff_cache/
 .conda/
 .env
-data/raw/
-data/processed/
-data/chroma/
-data/tasks.json
+data/
+ai_logs/
 logs/
 *.pyc
 .ms-playwright/
