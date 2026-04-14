@@ -4,6 +4,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .conda/
+.ms-playwright/
 .env
 data/raw/
 data/processed/
