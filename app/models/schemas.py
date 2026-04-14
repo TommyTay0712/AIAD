@@ -49,6 +49,10 @@ class AnalyzeOutput(BaseModel):
     content_table: list[dict[str, Any]]
     comment_table: list[dict[str, Any]]
     feature_table: list[dict[str, Any]]
+    copywriter_context: dict[str, Any] = Field(default_factory=dict)
+    prompt_bundle: dict[str, Any] = Field(default_factory=dict)
+    llm_result: dict[str, Any] = Field(default_factory=dict)
+    copy_candidates: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class TaskRecord(BaseModel):

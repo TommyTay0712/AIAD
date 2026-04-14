@@ -72,7 +72,7 @@ def _run_pipeline_task(task_id: str, payload: RunRequest, settings: Settings) ->
             if crawler.output_files.get("media_root_dir")
             else None,
         )
-        final_payload = run_data_workflow(normalized)
+        final_payload = run_data_workflow(normalized, ad_type=payload.ad_type)
         chroma_counts = ChromaStore(settings.chroma_persist_dir).write_task_payload(
             task_id,
             final_payload,

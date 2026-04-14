@@ -52,11 +52,15 @@ def test_data_pipeline_normalize_and_graph(tmp_path: Path) -> None:
         content_file=content_file,
         comment_file=comment_file,
     )
-    output = run_data_workflow(normalized)
+    output = run_data_workflow(normalized, ad_type="修护精华")
     assert output["summary"]["content_count"] == 1
     assert output["content_table"][0]["like_count"] == 12000
     assert output["comment_table"][0]["comment_id"] == "c1"
     assert "feature_table" in output
+    assert output["prompt_bundle"]["prompt_version"] == "agent5-v3"
+    assert "system_prompt" in output["prompt_bundle"]
+    assert output["llm_result"]["status"] == "not_configured"
+    assert output["copy_candidates"] == []
 
 
 def test_data_pipeline_chromadb_persist(tmp_path: Path) -> None:
