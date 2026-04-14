@@ -14,3 +14,4 @@ logs/
 .ms-playwright/
 stitch_/
 frontend/stitch_assets/
+.trae/
