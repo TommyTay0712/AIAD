@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from app.core.config import Settings
 from app.services.chroma_store import ChromaStore
 from app.services.normalize import normalize_dataset
 from app.workflows.data_graph import run_data_workflow
@@ -16,6 +17,10 @@ def test_data_pipeline_normalize_and_graph(tmp_path: Path) -> None:
     """验证标准化与LangGraph整理链路可正常输出。"""
     content_file = tmp_path / "search_contents_demo.jsonl"
     comment_file = tmp_path / "search_comments_demo.jsonl"
+    media_root_dir = tmp_path / "media_root"
+    image_dir = media_root_dir / "images" / "n1"
+    image_dir.mkdir(parents=True, exist_ok=True)
+    (image_dir / "beach_hat.jpg").write_bytes(b"fake-image")
     _write_jsonl(
         content_file,
         [
@@ -51,12 +56,30 @@ def test_data_pipeline_normalize_and_graph(tmp_path: Path) -> None:
         source_keyword="修护,敏感肌",
         content_file=content_file,
         comment_file=comment_file,
+        media_root_dir=media_root_dir,
+        product_info="敏感肌修护精华",
     )
-    output = run_data_workflow(normalized)
+    settings = Settings(
+        project_root=tmp_path,
+        aiad_python_exe=Path("/usr/bin/python3"),
+        media_crawler_dir=tmp_path / "vendor" / "MediaCrawler",
+        crawler_output_dir=tmp_path / "data" / "raw",
+        processed_output_dir=tmp_path / "data" / "processed",
+        logs_dir=tmp_path / "logs",
+        task_store_file=tmp_path / "data" / "tasks.json",
+        chroma_persist_dir=tmp_path / "data" / "chroma",
+        mediacrawler_python_exe=Path("/usr/bin/python3"),
+        playwright_browsers_path=tmp_path / ".ms-playwright",
+        vision_provider="mock",
+        vision_model="mock-vision",
+    )
+    output = run_data_workflow(normalized, settings=settings)
     assert output["summary"]["content_count"] == 1
     assert output["content_table"][0]["like_count"] == 12000
     assert output["comment_table"][0]["comment_id"] == "c1"
     assert "feature_table" in output
+    assert output["vision_analysis"]["source_media_count"] == 1
+    assert output["vision_analysis"]["model_provider"] == "mock"
 
 
 def test_data_pipeline_chromadb_persist(tmp_path: Path) -> None:

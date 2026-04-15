@@ -44,11 +44,88 @@ class TaskResponse(BaseModel):
     message: str = ""
 
 
+class VisionAnalysis(BaseModel):
+    scene: str = ""
+    vibe: str = ""
+    detected_items: list[str] = Field(default_factory=list)
+    people_emotions: list[str] = Field(default_factory=list)
+    visual_highlights: list[str] = Field(default_factory=list)
+    risk_flags: list[str] = Field(default_factory=list)
+    source_media_count: int = 0
+    model_provider: str = ""
+    model_name: str = ""
+
+
+class RawComment(BaseModel):
+    user: str = ""
+    content: str = ""
+    likes: int = 0
+
+
+class RequestInfo(BaseModel):
+    post_url: str = ""
+    product_info: str = ""
+    target_style: str = ""
+
+
+class RawData(BaseModel):
+    post_content: str = ""
+    media_paths: list[str] = Field(default_factory=list)
+    comments: list[RawComment] = Field(default_factory=list)
+
+
+class NLPAnalysis(BaseModel):
+    main_emotion: str = ""
+    pain_points: list[str] = Field(default_factory=list)
+    language_style: str = ""
+    ad_angles: list[str] = Field(default_factory=list)
+    keyword_summary: list[str] = Field(default_factory=list)
+
+
+class AdDraft(BaseModel):
+    style: str = ""
+    content: str = ""
+
+
+class GlobalAgentState(BaseModel):
+    request_info: RequestInfo = Field(default_factory=RequestInfo)
+    raw_data: RawData = Field(default_factory=RawData)
+    vision_analysis: VisionAnalysis = Field(default_factory=VisionAnalysis)
+    nlp_analysis: NLPAnalysis = Field(default_factory=NLPAnalysis)
+    rag_references: list[str] = Field(default_factory=list)
+    final_ads: list[AdDraft] = Field(default_factory=list)
+    review_score: int = 0
+
+
+class VisionRunRequest(BaseModel):
+    media_paths: list[str] = Field(default_factory=list)
+
+
+class ContextRunRequest(BaseModel):
+    comments: list[RawComment] = Field(default_factory=list)
+    product_info: str = ""
+
+
+class RagRunRequest(BaseModel):
+    vision_analysis: VisionAnalysis = Field(default_factory=VisionAnalysis)
+    nlp_analysis: NLPAnalysis = Field(default_factory=NLPAnalysis)
+    top_k: int = Field(default=5, ge=1, le=10)
+
+
+class CopywriterRunRequest(BaseModel):
+    request_info: RequestInfo = Field(default_factory=RequestInfo)
+    vision_analysis: VisionAnalysis = Field(default_factory=VisionAnalysis)
+    nlp_analysis: NLPAnalysis = Field(default_factory=NLPAnalysis)
+    rag_references: list[str] = Field(default_factory=list)
+    styles: list[str] = Field(default_factory=list)
+
+
 class AnalyzeOutput(BaseModel):
     summary: dict[str, Any]
     content_table: list[dict[str, Any]]
     comment_table: list[dict[str, Any]]
     feature_table: list[dict[str, Any]]
+    vision_analysis: VisionAnalysis = Field(default_factory=VisionAnalysis)
 
 
 class TaskRecord(BaseModel):

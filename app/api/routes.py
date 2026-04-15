@@ -13,17 +13,29 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from app.core.config import Settings, get_settings
 from app.models.schemas import (
+    AdDraft,
     AnalyzeOutput,
+    ContextRunRequest,
+    CopywriterRunRequest,
     ErrorCode,
+    GlobalAgentState,
+    NLPAnalysis,
+    RagRunRequest,
     RunRequest,
     TaskRecord,
     TaskResponse,
     TaskStatus,
+    VisionAnalysis,
+    VisionRunRequest,
 )
 from app.services.chroma_store import ChromaStore
+from app.services.context_agent import ContextAgent
+from app.services.copywriter_agent import CopywriterAgent
 from app.services.crawler_runner import run_crawler
 from app.services.normalize import normalize_dataset
+from app.services.rag_agent import RagAgent
 from app.services.task_store import TaskStore
+from app.services.vision import VisionAgent
 from app.workflows.data_graph import run_data_workflow
 
 router = APIRouter(prefix="/api/ad-intel", tags=["ad-intel"])
@@ -32,6 +44,10 @@ logger = logging.getLogger(__name__)
 
 def _task_store(settings: Settings = Depends(get_settings)) -> TaskStore:
     return TaskStore(settings.task_store_file)
+
+
+def _build_state_template() -> GlobalAgentState:
+    return GlobalAgentState()
 
 
 def _run_pipeline_task(task_id: str, payload: RunRequest, settings: Settings) -> None:
@@ -71,8 +87,9 @@ def _run_pipeline_task(task_id: str, payload: RunRequest, settings: Settings) ->
             media_root_dir=Path(crawler.output_files["media_root_dir"])
             if crawler.output_files.get("media_root_dir")
             else None,
+            product_info=payload.ad_type,
         )
-        final_payload = run_data_workflow(normalized)
+        final_payload = run_data_workflow(normalized, settings=settings)
         chroma_counts = ChromaStore(settings.chroma_persist_dir).write_task_payload(
             task_id,
             final_payload,
@@ -86,7 +103,11 @@ def _run_pipeline_task(task_id: str, payload: RunRequest, settings: Settings) ->
         record = task_store.get(task_id)
         if record:
             record.status = TaskStatus.SUCCESS
-            record.result = {"processed_file": str(processed_path), "chroma_counts": chroma_counts}
+            record.result = {
+                "processed_file": str(processed_path),
+                "chroma_counts": chroma_counts,
+                "vision_analysis": final_payload.get("vision_analysis", {}),
+            }
             record.error_code = None
             record.error_message = ""
             task_store.upsert(record)
@@ -362,6 +383,7 @@ def get_task_meta(
         "message": record.error_message,
         "processed_file": result.get("processed_file", ""),
         "chroma_counts": result.get("chroma_counts", {}),
+        "vision_analysis": result.get("vision_analysis", {}),
         "params": record.params,
         "updated_at": record.updated_at.isoformat(),
     }
@@ -419,3 +441,42 @@ def get_recent_tasks(
         }
         for item in records
     ]
+
+
+@router.get("/agents/state-schema", response_model=GlobalAgentState)
+def get_agent_state_schema() -> GlobalAgentState:
+    """返回各 Agent 联调使用的全局状态模板。"""
+    return _build_state_template()
+
+
+@router.post("/agents/vision/run", response_model=VisionAnalysis)
+def run_vision_agent(
+    payload: VisionRunRequest,
+    settings: Settings = Depends(get_settings),
+) -> VisionAnalysis:
+    """单独执行 Agent2 视觉分析。"""
+    return VisionAgent(settings).analyze(payload.media_paths)
+
+
+@router.post("/agents/context/run", response_model=NLPAnalysis)
+def run_context_agent(payload: ContextRunRequest) -> NLPAnalysis:
+    """单独执行 Agent3 评论区语境分析。"""
+    return ContextAgent().analyze(payload.comments, payload.product_info)
+
+
+@router.post("/agents/rag/run", response_model=list[str])
+def run_rag_agent(payload: RagRunRequest) -> list[str]:
+    """单独执行 Agent4 检索接口。"""
+    return RagAgent().retrieve(payload.vision_analysis, payload.nlp_analysis, payload.top_k)
+
+
+@router.post("/agents/copywriter/run", response_model=list[AdDraft])
+def run_copywriter_agent(payload: CopywriterRunRequest) -> list[AdDraft]:
+    """单独执行 Agent5 文案生成接口。"""
+    return CopywriterAgent().generate(
+        payload.request_info,
+        payload.vision_analysis,
+        payload.nlp_analysis,
+        payload.rag_references,
+        payload.styles,
+    )

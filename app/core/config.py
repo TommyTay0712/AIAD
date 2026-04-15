@@ -1,16 +1,36 @@
 from __future__ import annotations
 
 import os
+import shutil
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 
+def _resolve_path(project_root: Path, env_name: str, default: str) -> Path:
+    raw_value = os.getenv(env_name, default)
+    path = Path(raw_value).expanduser()
+    return path if path.is_absolute() else project_root / path
+
+
+def _resolve_executable(project_root: Path, env_name: str, default: str) -> Path:
+    raw_value = os.getenv(env_name, default).strip()
+    if not raw_value:
+        return Path(default)
+    resolved = shutil.which(raw_value)
+    if resolved:
+        return Path(resolved)
+    path = Path(raw_value).expanduser()
+    return path if path.is_absolute() else project_root / path
+
+
 class Settings(BaseModel):
     """应用配置对象。"""
 
     project_root: Path = Field(default=Path(__file__).resolve().parents[2])
+    aiad_python_exe: Path = Field(default=Path(sys.executable))
     media_crawler_dir: Path = Field(
         default=Path(__file__).resolve().parents[2] / "vendor" / "MediaCrawler"
     )
@@ -25,12 +45,19 @@ class Settings(BaseModel):
     chroma_persist_dir: Path = Field(
         default=Path(__file__).resolve().parents[2] / "data" / "chroma"
     )
-    mediacrawler_python_exe: Path = Field(
-        default=Path(__file__).resolve().parents[2] / ".conda" / "mediacrawler" / "python.exe"
-    )
+    mediacrawler_python_exe: Path = Field(default=Path(sys.executable))
     playwright_browsers_path: Path = Field(
         default=Path(__file__).resolve().parents[2] / ".ms-playwright"
     )
+    log_level: str = Field(default="INFO")
+    vision_provider: str = Field(default="mock")
+    vision_model: str = Field(default="Qwen/Qwen3.5-397B-A17B")
+    vision_api_base: str = Field(default="https://api-inference.modelscope.cn/v1")
+    vision_api_key: str = Field(default="")
+    vision_timeout_seconds: int = Field(default=45)
+    vision_enable_mock_fallback: bool = Field(default=True)
+    vision_max_media_count: int = Field(default=6)
+    vision_video_frame_sample_count: int = Field(default=3)
 
 
 def get_settings() -> Settings:
@@ -39,16 +66,29 @@ def get_settings() -> Settings:
     project_root = Path(__file__).resolve().parents[2]
     settings = Settings(
         project_root=project_root,
-        media_crawler_dir=project_root / os.getenv("MEDIA_CRAWLER_DIR", "vendor/MediaCrawler"),
-        crawler_output_dir=project_root / os.getenv("CRAWLER_OUTPUT_DIR", "data/raw"),
-        processed_output_dir=project_root / os.getenv("PROCESSED_OUTPUT_DIR", "data/processed"),
-        logs_dir=project_root / os.getenv("LOGS_DIR", "logs"),
-        task_store_file=project_root / os.getenv("TASK_STORE_FILE", "data/tasks.json"),
-        chroma_persist_dir=project_root / os.getenv("CHROMA_PERSIST_DIR", "data/chroma"),
-        mediacrawler_python_exe=project_root
-        / os.getenv("MEDIACRAWLER_PYTHON_EXE", ".conda/mediacrawler/python.exe"),
-        playwright_browsers_path=project_root
-        / os.getenv("PLAYWRIGHT_BROWSERS_PATH", ".ms-playwright"),
+        aiad_python_exe=_resolve_executable(project_root, "AIAD_PYTHON_EXE", sys.executable),
+        media_crawler_dir=_resolve_path(project_root, "MEDIA_CRAWLER_DIR", "vendor/MediaCrawler"),
+        crawler_output_dir=_resolve_path(project_root, "CRAWLER_OUTPUT_DIR", "data/raw"),
+        processed_output_dir=_resolve_path(project_root, "PROCESSED_OUTPUT_DIR", "data/processed"),
+        logs_dir=_resolve_path(project_root, "LOGS_DIR", "logs"),
+        task_store_file=_resolve_path(project_root, "TASK_STORE_FILE", "data/tasks.json"),
+        chroma_persist_dir=_resolve_path(project_root, "CHROMA_PERSIST_DIR", "data/chroma"),
+        mediacrawler_python_exe=_resolve_executable(
+            project_root, "MEDIACRAWLER_PYTHON_EXE", sys.executable
+        ),
+        playwright_browsers_path=_resolve_path(
+            project_root, "PLAYWRIGHT_BROWSERS_PATH", ".ms-playwright"
+        ),
+        log_level=os.getenv("LOG_LEVEL", "INFO"),
+        vision_provider=os.getenv("VISION_PROVIDER", "mock"),
+        vision_model=os.getenv("VISION_MODEL", "Qwen/Qwen3.5-397B-A17B"),
+        vision_api_base=os.getenv("VISION_API_BASE", "https://api-inference.modelscope.cn/v1"),
+        vision_api_key=os.getenv("VISION_API_KEY", ""),
+        vision_timeout_seconds=int(os.getenv("VISION_TIMEOUT_SECONDS", "45")),
+        vision_enable_mock_fallback=os.getenv("VISION_ENABLE_MOCK_FALLBACK", "true").lower()
+        in {"1", "true", "yes", "y"},
+        vision_max_media_count=int(os.getenv("VISION_MAX_MEDIA_COUNT", "6")),
+        vision_video_frame_sample_count=int(os.getenv("VISION_VIDEO_FRAME_SAMPLE_COUNT", "3")),
     )
     settings.crawler_output_dir.mkdir(parents=True, exist_ok=True)
     settings.processed_output_dir.mkdir(parents=True, exist_ok=True)
