@@ -1,68 +1,65 @@
 from app.services.copywriter import (
-    build_agent5_output,
     build_copywriter_context,
     build_generation_prompts,
+    run_copywriter_agent,
 )
 
 
+def _mock_state() -> dict:
+    return {
+        "request_info": {
+            "post_url": "https://www.xiaohongshu.com/explore/xxxx",
+            "product_info": "蕉下防晒霜，特点：水润不假白，适合敏感肌",
+            "target_style": "测评风",
+        },
+        "raw_data": {
+            "post_content": "今天去海边玩啦，太阳好大，想找个温和点的防晒。",
+            "media_paths": ["./data/raw/xxxx/media/1.jpg"],
+            "comments": [{"user": "A", "content": "求博主的防晒！", "likes": 120}],
+        },
+        "vision_analysis": {
+            "scene": "海边/沙滩",
+            "vibe": "轻松/夏日/度假",
+            "detected_items": ["草帽", "墨镜"],
+        },
+        "nlp_analysis": {
+            "main_emotion": "积极，对防晒产品有强需求",
+            "pain_points": ["怕晒黑", "需要海边适用的高倍防晒"],
+            "language_style": "带大量Emoji，网感强",
+        },
+        "rag_references": [
+            "姐妹们听我的，海边一定要带这款防晒，我涂了完全没黑！",
+            "这个场景绝了，顺便安利一个我空管无数次的防晒霜~",
+        ],
+        "final_ads": [],
+        "review_score": 0,
+    }
+
+
 def test_copywriter_build_context() -> None:
-    payload = {
-        "content_table": [{"title": "敏感肌通勤护肤", "desc": "最近换季有点泛红"}],
-        "feature_table": [
-            {
-                "ad_fit_score": 1.2,
-                "audience_profile": "学生党",
-                "topic_cluster": "beauty_care",
-                "pain_points": ["低敏诉求", "价格敏感"],
-                "intent_labels": ["成分", "场景"],
-                "risk_flags": ["合规表述风险"],
-            }
-        ],
-    }
-    context = build_copywriter_context("修护精华", payload)
-    assert context["ad_type"] == "修护精华"
-    assert context["audience"] == "学生党"
-    assert context["pain_points"][0] == "低敏诉求"
-    assert context["intent_labels"][0] == "成分"
+    context = build_copywriter_context(_mock_state())
+    assert context["product_info"].startswith("蕉下防晒霜")
+    assert context["scene"] == "海边/沙滩"
+    assert context["pain_points"][0] == "怕晒黑"
+    assert context["language_style"] == "带大量Emoji，网感强"
 
 
-def test_copywriter_build_agent5_output_default_llm_placeholder() -> None:
-    payload = {
-        "content_table": [{"title": "敏感肌通勤护肤", "desc": "最近换季有点泛红"}],
-        "feature_table": [
-            {
-                "ad_fit_score": 1.2,
-                "audience_profile": "学生党",
-                "topic_cluster": "beauty_care",
-                "pain_points": ["低敏诉求", "价格敏感"],
-                "intent_labels": ["成分", "场景"],
-                "risk_flags": [],
-            }
-        ],
-    }
-    output = build_agent5_output("修护精华", payload)
-    assert output["copywriter_context"]["ad_type"] == "修护精华"
-    assert output["prompt_bundle"]["prompt_version"] == "agent5-v3"
-    assert output["llm_result"]["status"] == "not_configured"
-    assert output["copy_candidates"] == []
+def test_copywriter_run_agent_default_llm_placeholder() -> None:
+    state = run_copywriter_agent(_mock_state())
+    assert state["prompt_bundle"]["prompt_version"] == "agent5-v4"
+    assert state["llm_result"]["status"] == "not_configured"
+    assert state["final_ads"] == []
+    assert state["review_score"] == 0
 
 
 def test_copywriter_build_generation_prompts() -> None:
-    context = {
-        "ad_type": "修护精华",
-        "audience": "学生党",
-        "topic_cluster": "beauty_care",
-        "pain_points": ["低敏诉求", "价格敏感"],
-        "intent_labels": ["成分", "场景"],
-        "risk_flags": ["合规表述风险"],
-        "scene_hint": "敏感肌通勤护肤",
-    }
+    context = build_copywriter_context(_mock_state())
     prompts = build_generation_prompts(context)
-    assert "结构化 JSON 数组" in prompts["system_prompt"]
+    assert "style、content" in prompts["system_prompt"]
     assert "<example>" in prompts["system_prompt"]
-    assert "生成 6 条不同风格" in prompts["user_prompt"]
+    assert "生成 3 条以上不同风格" in prompts["user_prompt"]
     assert "不要出现购买链接" in prompts["user_prompt"]
-    assert prompts["prompt_version"] == "agent5-v3"
+    assert prompts["prompt_version"] == "agent5-v4"
 
 
 class _FakeLLMGateway:
@@ -71,36 +68,23 @@ class _FakeLLMGateway:
             "status": "success",
             "provider": "mock",
             "model": "fake-model",
-            "copy_candidates": [
+            "final_ads": [
                 {
                     "style": "测评风",
-                    "ad_text": "这是一条模型输出的测试文案。",
-                    "reason": "测试",
-                    "risk_flags": [],
+                    "content": "这是一条模型输出的测试文案。",
                 }
             ],
             "raw_response": "{\"ok\": true}",
             "message": "mock success",
             "prompt_version": prompt_bundle["prompt_version"],
+            "review_score": 90,
         }
 
 
-def test_copywriter_build_agent5_output_with_fake_llm() -> None:
-    payload = {
-        "content_table": [{"title": "敏感肌通勤护肤", "desc": "最近换季有点泛红"}],
-        "feature_table": [
-            {
-                "ad_fit_score": 1.2,
-                "audience_profile": "学生党",
-                "topic_cluster": "beauty_care",
-                "pain_points": ["低敏诉求", "价格敏感"],
-                "intent_labels": ["成分", "场景"],
-                "risk_flags": [],
-            }
-        ],
-    }
-    output = build_agent5_output("修护精华", payload, llm_gateway=_FakeLLMGateway())
-    assert output["llm_result"]["status"] == "success"
-    assert output["llm_result"]["provider"] == "mock"
-    assert len(output["copy_candidates"]) == 1
-    assert output["copy_candidates"][0]["style"] == "测评风"
+def test_copywriter_run_agent_with_fake_llm() -> None:
+    state = run_copywriter_agent(_mock_state(), llm_gateway=_FakeLLMGateway())
+    assert state["llm_result"]["status"] == "success"
+    assert state["llm_result"]["provider"] == "mock"
+    assert len(state["final_ads"]) == 1
+    assert state["final_ads"][0]["style"] == "测评风"
+    assert state["review_score"] == 90

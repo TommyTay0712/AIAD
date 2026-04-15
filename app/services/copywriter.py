@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import Counter
 from typing import Any, Protocol
 
 STYLE_GUIDES = [
@@ -41,19 +40,19 @@ FEW_SHOT_EXAMPLES = [
         "input": {
             "style": "测评风",
             "pain_point": "低敏诉求",
-            "intent": "成分",
-            "ad_type": "修护精华",
+            "scene": "海边/沙滩",
+            "product_info": "蕉下防晒霜，特点：水润不假白，适合敏感肌",
         },
-        "output": "我自己更看重修护精华的温和度和持续使用感，尤其是有低敏诉求的时候，先看成分逻辑和肤感，反而比单看宣传词更有参考价值。",
+        "output": {"style": "测评风", "content": "海边这种场景我会更看重防晒的肤感和稳定性，这类水润不假白、敏感肌也能安心用的方向会更值得先看。"},
     },
     {
         "input": {
             "style": "随口安利风",
-            "pain_point": "价格敏感",
-            "intent": "场景",
-            "ad_type": "防晒",
+            "pain_point": "怕晒黑",
+            "scene": "通勤/日常",
+            "product_info": "蕉下防晒霜，特点：水润不假白，适合敏感肌",
         },
-        "output": "如果你也是通勤随手补防晒那种，其实可以看看这种更轻一点的，价格也没那么有压力，日常带着补涂会顺手很多。",
+        "output": {"style": "随口安利风", "content": "如果你也是日常通勤怕晒黑那种，这种水润一点、不容易假白的防晒会更顺手，补涂的时候也没那么有负担。"},
     },
 ]
 
@@ -73,61 +72,36 @@ class NullLLMGateway:
             "status": "not_configured",
             "provider": "",
             "model": "",
-            "copy_candidates": [],
+            "final_ads": [],
             "raw_response": "",
             "message": "LLM 接口已预留，当前未配置真实模型。",
             "prompt_version": prompt_bundle.get("prompt_version", ""),
+            "review_score": 0,
         }
 
 
-def _pick_primary_feature(feature_table: list[dict[str, Any]]) -> dict[str, Any]:
-    if not feature_table:
-        return {}
-    return max(feature_table, key=lambda item: float(item.get("ad_fit_score", 0)))
-
-
-def _collect_top_labels(feature_table: list[dict[str, Any]], field: str, limit: int = 3) -> list[str]:
-    values: list[str] = []
-    for row in feature_table:
-        raw = row.get(field, [])
-        if isinstance(raw, list):
-            values.extend(str(item).strip() for item in raw if str(item).strip())
-        elif raw:
-            values.append(str(raw).strip())
-    return [item for item, _ in Counter(values).most_common(limit)]
-
-
-def _collect_scene_hint(content_table: list[dict[str, Any]]) -> str:
-    for row in content_table:
-        combined = " ".join([str(row.get("title", "")), str(row.get("desc", ""))]).strip()
-        if combined:
-            return combined[:36]
-    return "日常使用场景"
-
-
-def build_copywriter_context(ad_type: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """从现有结构化数据中整理文案生成所需上下文。"""
-    feature_table = payload.get("feature_table", [])
-    content_table = payload.get("content_table", [])
-    primary = _pick_primary_feature(feature_table)
-    pain_points = _collect_top_labels(feature_table, "pain_points")
-    intents = _collect_top_labels(feature_table, "intent_labels")
-    risks = _collect_top_labels(feature_table, "risk_flags")
-    audience = str(primary.get("audience_profile") or "泛人群")
-    topic = str(primary.get("topic_cluster") or "general")
-    scene_hint = _collect_scene_hint(content_table)
+def build_copywriter_context(state: dict[str, Any]) -> dict[str, Any]:
+    """从规范约定的 Global State 中整理文案生成所需上下文。"""
+    request_info = state.get("request_info", {})
+    vision_analysis = state.get("vision_analysis", {})
+    nlp_analysis = state.get("nlp_analysis", {})
+    rag_references = state.get("rag_references", [])
+    raw_data = state.get("raw_data", {})
     return {
-        "ad_type": ad_type.strip(),
-        "audience": audience,
-        "topic_cluster": topic,
-        "pain_points": pain_points or ["需求待挖掘"],
-        "intent_labels": intents or ["场景"],
-        "risk_flags": risks,
-        "scene_hint": scene_hint,
+        "product_info": str(request_info.get("product_info", "")).strip(),
+        "target_style": str(request_info.get("target_style", "测评风")).strip() or "测评风",
+        "scene": str(vision_analysis.get("scene", "待补充场景")),
+        "vibe": str(vision_analysis.get("vibe", "生活化")),
+        "detected_items": vision_analysis.get("detected_items", []),
+        "main_emotion": str(nlp_analysis.get("main_emotion", "待补充情绪")),
+        "pain_points": nlp_analysis.get("pain_points", []) or ["需求待挖掘"],
+        "language_style": str(nlp_analysis.get("language_style", "生活化表达")),
+        "rag_references": rag_references if isinstance(rag_references, list) else [],
+        "post_content": str(raw_data.get("post_content", "")).strip(),
     }
 
 
-def build_generation_prompts(context: dict[str, Any]) -> dict[str, str]:
+def build_generation_prompts(context: dict[str, Any]) -> dict[str, Any]:
     """构造供真实 LLM 使用的 system/user prompt。"""
     style_block = "\n".join(
         f"- {item['style']}：{item['tone']}；要求：{item['instruction']}" for item in STYLE_GUIDES
@@ -151,8 +125,8 @@ def build_generation_prompts(context: dict[str, Any]) -> dict[str, str]:
 1. 先回应用户语境，再自然带出产品方向。
 2. 文风要像评论区真人，不要像电商 banner 或促销短信。
 3. 避免绝对化、医疗化、虚假承诺、夸张效果。
-4. 输出必须是结构化 JSON 数组，每个元素包含 style、ad_text、reason、risk_flags。
-5. 每条 ad_text 长度控制在 40-90 字，尽量一句到两句。
+4. 输出必须是结构化 JSON 数组，每个元素包含 style、content。
+5. 每条 content 长度控制在 40-90 字，尽量一句到两句。
 6. 优先使用“个人体验”“更适合”“可以先看”这类低压迫表达，不要使用“必须买”“闭眼入”“根治”等强推表达。
 
 可选风格：
@@ -165,30 +139,33 @@ def build_generation_prompts(context: dict[str, Any]) -> dict[str, str]:
 """.strip()
 
     user_prompt = f"""
-请根据以下上下文，生成 {len(STYLE_GUIDES)} 条不同风格的小红书评论区候选文案。
+请根据以下上下文，生成 3 条以上不同风格的小红书评论区候选文案，并优先覆盖目标风格。
 
 ### 上下文
-- 产品类型: {context['ad_type']}
-- 受众画像: {context['audience']}
-- 场景线索: {context['scene_hint']}
-- 主题簇: {context['topic_cluster']}
+- 产品信息: {context['product_info']}
+- 目标风格: {context['target_style']}
+- 场景: {context['scene']}
+- 氛围: {context['vibe']}
+- 帖子正文: {context['post_content']}
 - 主要痛点: {", ".join(context['pain_points'])}
-- 主要意图: {", ".join(context['intent_labels'])}
-- 风险提示: {", ".join(context['risk_flags']) if context['risk_flags'] else "无显著风险"}
+- 情绪: {context['main_emotion']}
+- 语言风格: {context['language_style']}
+- 参考文案: {" | ".join(context['rag_references']) if context['rag_references'] else "无"}
 
 ### 输出要求
 - 每条风格不同，避免改几个词重复表达
 - 优先写“真实体验细节、选择逻辑、低压迫建议”
 - 不要出现购买链接、私信引导、联系方式
 - 不要写得像官方客服
+- 输出字段必须是 style 和 content
 """.strip()
     return {
-        "prompt_version": "agent5-v3",
+        "prompt_version": "agent5-v4",
         "style_guides": STYLE_GUIDES,
         "few_shot_examples": FEW_SHOT_EXAMPLES,
         "expected_output_schema": {
             "type": "json_array",
-            "fields": ["style", "ad_text", "reason", "risk_flags"],
+            "fields": ["style", "content"],
         },
         "system_prompt": system_prompt,
         "user_prompt": user_prompt,
@@ -207,28 +184,28 @@ def call_llm_with_reserved_interface(
         "status": str(result.get("status", "unknown")),
         "provider": str(result.get("provider", "")),
         "model": str(result.get("model", "")),
-        "copy_candidates": result.get("copy_candidates", []),
+        "final_ads": result.get("final_ads", []),
         "raw_response": str(result.get("raw_response", "")),
         "message": str(result.get("message", "")),
+        "review_score": int(result.get("review_score", 0) or 0),
         "prompt_version": str(
             result.get("prompt_version", prompt_bundle.get("prompt_version", ""))
         ),
     }
 
 
-def build_agent5_output(
-    ad_type: str,
-    payload: dict[str, Any],
+def run_copywriter_agent(
+    state: dict[str, Any],
     llm_gateway: LLMGateway | None = None,
 ) -> dict[str, Any]:
-    """生成 Agent 5 输出：当前以 Prompt 为主，并预留 LLM 输出通道。"""
-    context = build_copywriter_context(ad_type, payload)
+    """运行 Agent 5，并把 final_ads 写回 Global State。"""
+    context = build_copywriter_context(state)
     prompt_bundle = build_generation_prompts(context)
     llm_result = call_llm_with_reserved_interface(prompt_bundle, llm_gateway=llm_gateway)
-    copy_candidates = llm_result.get("copy_candidates", [])
-    return {
-        "copywriter_context": context,
-        "prompt_bundle": prompt_bundle,
-        "llm_result": llm_result,
-        "copy_candidates": copy_candidates if isinstance(copy_candidates, list) else [],
-    }
+    final_ads = llm_result.get("final_ads", [])
+    next_state = dict(state)
+    next_state["prompt_bundle"] = prompt_bundle
+    next_state["llm_result"] = llm_result
+    next_state["final_ads"] = final_ads if isinstance(final_ads, list) else []
+    next_state["review_score"] = int(llm_result.get("review_score", 0) or 0)
+    return next_state
