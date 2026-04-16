@@ -24,6 +24,9 @@ class RunRequest(BaseModel):
     """分析请求入参。"""
 
     ad_type: str = Field(min_length=1)
+    post_url: str = Field(default="")
+    product_info: str = Field(default="")
+    target_style: str = Field(default="测评风")
     keywords: list[str] = Field(default_factory=list)
     platform: str = Field(default="xhs")
     limit: int = Field(default=20, ge=1, le=200)
@@ -49,6 +52,12 @@ class AnalyzeOutput(BaseModel):
     content_table: list[dict[str, Any]]
     comment_table: list[dict[str, Any]]
     feature_table: list[dict[str, Any]]
+    request_info: dict[str, Any] = Field(default_factory=dict)
+    global_state: dict[str, Any] = Field(default_factory=dict)
+    prompt_bundle: dict[str, Any] = Field(default_factory=dict)
+    llm_result: dict[str, Any] = Field(default_factory=dict)
+    final_ads: list[dict[str, Any]] = Field(default_factory=list)
+    review_score: int = Field(default=0)
 
 
 class TaskRecord(BaseModel):
