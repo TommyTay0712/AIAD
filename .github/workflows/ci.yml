@@ -6,6 +6,8 @@ on:
     branches:
       - main
       - master
+      - dev
+      - dev-*
   workflow_dispatch:
 
 concurrency:
