@@ -65,6 +65,31 @@ E:\AIAD\.conda\aiad\python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 -
 http://127.0.0.1:8000/
 ```
 
+### 1.1) AIAD 环境初始化（Conda）
+
+如需在本地或 CI 中复用统一的 AIAD 环境，可直接使用根目录的 `environment.aiad.yml`：
+
+```bash
+conda env create -f environment.aiad.yml
+conda activate aiad
+```
+
+如果环境已存在，可执行：
+
+```bash
+conda env update -f environment.aiad.yml --prune
+conda activate aiad
+```
+
+### 1.2) 本地校验命令
+
+激活 `aiad` 环境后，执行：
+
+```bash
+python -m pytest tests -q
+python -m mypy app tests
+```
+
 ### 2) MediaCrawler 独立环境（仅调试时手动运行）
 
 安装 MediaCrawler 依赖：

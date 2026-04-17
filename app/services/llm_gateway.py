@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import re
 from typing import Any
@@ -19,19 +20,58 @@ def _strip_code_fence(text: str) -> str:
 
 def _extract_json_payload(text: str) -> Any:
     cleaned = _strip_code_fence(text)
-    for candidate in (cleaned,):
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    decoder = json.JSONDecoder()
+    index = 0
+    values: list[Any] = []
+    while index < len(cleaned):
+        while index < len(cleaned) and cleaned[index].isspace():
+            index += 1
+        if index >= len(cleaned):
+            break
         try:
-            return json.loads(candidate)
+            value, end = decoder.raw_decode(cleaned, index)
         except json.JSONDecodeError:
+            values = []
+            break
+        values.append(value)
+        index = end
+    if values:
+        return values if len(values) > 1 else values[0]
+
+    for candidate in (cleaned, f"({cleaned})"):
+        try:
+            return ast.literal_eval(candidate)
+        except (ValueError, SyntaxError):
             pass
 
     array_match = re.search(r"(\[[\s\S]*\])", cleaned)
     if array_match:
-        return json.loads(array_match.group(1))
+        candidate = array_match.group(1)
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            for literal_candidate in (candidate, f"({candidate})"):
+                try:
+                    return ast.literal_eval(literal_candidate)
+                except (ValueError, SyntaxError):
+                    pass
 
     object_match = re.search(r"(\{[\s\S]*\})", cleaned)
     if object_match:
-        return json.loads(object_match.group(1))
+        candidate = object_match.group(1)
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            for literal_candidate in (candidate, f"({candidate})"):
+                try:
+                    return ast.literal_eval(literal_candidate)
+                except (ValueError, SyntaxError):
+                    pass
 
     raise ValueError("LLM 输出中未提取到有效 JSON")
 
@@ -45,9 +85,16 @@ def _normalize_ad_item(item: dict[str, Any]) -> dict[str, str] | None:
 
 
 def _normalize_final_ads(payload: Any) -> list[dict[str, str]]:
-    if isinstance(payload, list):
-        normalized = [_normalize_ad_item(item) for item in payload if isinstance(item, dict)]
-        return [item for item in normalized if item]
+    if isinstance(payload, (list, tuple)):
+        normalized: list[dict[str, str]] = []
+        for item in payload:
+            if isinstance(item, dict):
+                ad_item = _normalize_ad_item(item)
+                if ad_item:
+                    normalized.append(ad_item)
+            elif isinstance(item, (list, tuple, dict)):
+                normalized.extend(_normalize_final_ads(item))
+        return normalized
 
     if isinstance(payload, dict):
         for key in ("final_ads", "ads", "items", "results"):
