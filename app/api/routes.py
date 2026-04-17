@@ -22,6 +22,7 @@ from app.models.schemas import (
 )
 from app.services.chroma_store import ChromaStore
 from app.services.crawler_runner import run_crawler
+from app.services.llm_gateway import build_llm_gateway
 from app.services.normalize import normalize_dataset
 from app.services.task_store import TaskStore
 from app.workflows.data_graph import run_data_workflow
@@ -72,7 +73,16 @@ def _run_pipeline_task(task_id: str, payload: RunRequest, settings: Settings) ->
             if crawler.output_files.get("media_root_dir")
             else None,
         )
-        final_payload = run_data_workflow(normalized)
+        request_info = {
+            "post_url": payload.post_url,
+            "product_info": payload.product_info or payload.ad_type,
+            "target_style": payload.target_style,
+        }
+        final_payload = run_data_workflow(
+            normalized,
+            request_info=request_info,
+            llm_gateway=build_llm_gateway(settings),
+        )
         chroma_counts = ChromaStore(settings.chroma_persist_dir).write_task_payload(
             task_id,
             final_payload,
@@ -292,6 +302,9 @@ def run_analysis(
         updated_at=datetime.now(),
         params={
             "ad_type": payload.ad_type,
+            "post_url": payload.post_url,
+            "product_info": payload.product_info,
+            "target_style": payload.target_style,
             "keywords": payload.keywords,
             "platform": payload.platform,
             "limit": payload.limit,

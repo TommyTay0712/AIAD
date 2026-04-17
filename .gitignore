@@ -4,13 +4,13 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .conda/
+.ollama/
 .env
-data/raw/
-data/processed/
-data/chroma/
-data/tasks.json
+data/
+ai_logs/
 logs/
 *.pyc
 .ms-playwright/
 stitch_/
 frontend/stitch_assets/
+.trae/
