@@ -6,14 +6,14 @@
           <p class="text-xs text-on-surface-variant/80 mt-1">小红书评论广告助手</p>
         </div>
         <nav class="flex-1 px-4 space-y-1">
-          <button v-for="nav in navItems" :key="nav.key" @click="activeScreen = nav.key" class="w-full flex items-center gap-3 px-4 py-3 text-left rounded-xl transition-all duration-200"
+          <button v-for="nav in navItems" :key="nav.key" @click="setActiveScreen(nav.key)" class="w-full flex items-center gap-3 px-4 py-3 text-left rounded-xl transition-all duration-200"
             :class="activeScreen === nav.key ? 'text-blue-800 font-bold border-r-4 border-blue-800 bg-white/60' : 'text-slate-600 hover:text-blue-700 hover:bg-slate-200/50'">
             <span class="material-symbols-outlined" :class="activeScreen === nav.key ? 'active-fill' : ''">{{ nav.icon }}</span>
             <span>{{ nav.label }}</span>
           </button>
         </nav>
         <div class="p-4 mt-auto space-y-2">
-          <button class="w-full signature-gradient text-white py-3 rounded-xl font-semibold flex items-center justify-center gap-2" @click="activeScreen = 'campaign'">
+          <button class="w-full signature-gradient text-white py-3 rounded-xl font-semibold flex items-center justify-center gap-2" @click="startNewCampaign">
             <span class="material-symbols-outlined text-sm">add</span>
             新建任务
           </button>
@@ -25,7 +25,7 @@
         <header class="h-16 flex justify-between items-center px-8 w-full border-b border-slate-200/50 bg-slate-50 sticky top-0 z-30">
           <div class="flex items-center gap-3">
             <h2 class="text-lg font-headline font-bold text-primary">{{ activeScreenTitle }}</h2>
-            <span class="px-2 py-1 rounded-full bg-secondary-container/40 text-secondary text-xs font-semibold">{{ taskStatusText }}</span>
+            <span class="px-2 py-1 rounded-full text-xs font-semibold" :class="taskStateBadgeClass">{{ taskStatusText }}</span>
           </div>
           <div class="flex items-center gap-4">
             <div class="relative">
@@ -37,13 +37,25 @@
         </header>
 
         <section class="p-12 max-w-7xl mx-auto space-y-10" v-if="activeScreen === 'campaign'">
+          <div class="rounded-xl px-4 py-3 text-sm" :class="taskStateCardClass">
+            <div class="font-semibold">{{ taskStateTitle }}</div>
+            <div class="mt-1">{{ taskStateDesc }}</div>
+            <div class="mt-2 flex gap-2" v-if="taskPhase === 'success'">
+              <button class="px-3 py-1 rounded-lg bg-primary text-white" @click="setActiveScreen('review')">查看审核队列</button>
+              <button class="px-3 py-1 rounded-lg bg-surface-container-highest" @click="setActiveScreen('analytics')">查看数据看板</button>
+            </div>
+            <div class="mt-2" v-if="taskPhase === 'error'">
+              <button class="px-3 py-1 rounded-lg bg-red-100 text-red-700" @click="runTask" :disabled="isRunning || !adType">重试任务</button>
+            </div>
+          </div>
+
           <div class="flex justify-between items-end">
             <div>
               <h3 class="text-4xl font-headline font-extrabold text-primary tracking-tight">Campaign Configuration</h3>
               <p class="text-on-surface-variant mt-2">按 Stitch 的 Campaign Setup 结构配置抓取与投放策略。</p>
             </div>
             <div class="flex gap-3">
-              <button class="px-6 py-2.5 rounded-xl bg-surface-container-highest text-on-surface font-semibold">保存草稿</button>
+              <button class="px-6 py-2.5 rounded-xl bg-surface-container-highest text-on-surface font-semibold" @click="saveDraft">保存草稿</button>
               <button class="px-8 py-2.5 rounded-xl signature-gradient text-white font-bold flex items-center gap-2 disabled:opacity-60" @click="runTask" :disabled="isRunning || !adType">
                 <span class="material-symbols-outlined text-sm">auto_awesome</span>
                 {{ isRunning ? "分析中..." : "开始AI分析" }}
@@ -119,6 +131,11 @@
               <div class="bg-surface-container-low p-8 rounded-xl">
                 <h4 class="font-headline text-lg font-bold text-primary">智能上下文洞察</h4>
                 <p class="text-sm text-on-surface-variant mt-2 italic">{{ aiHintText }}</p>
+                <div class="mt-3 space-y-1 text-xs text-on-surface-variant">
+                  <div>模型：{{ modelName }}</div>
+                  <div>接口前缀：{{ apiPrefix }}</div>
+                  <div v-if="baseUrl">服务地址：{{ baseUrl }}</div>
+                </div>
                 <div class="mt-5 grid grid-cols-2 gap-3 text-sm">
                   <div class="bg-surface-container-lowest rounded-xl p-4">
                     <div class="text-xs text-on-surface-variant">任务轮询</div>
@@ -132,7 +149,10 @@
               </div>
             </div>
           </div>
-          <div v-if="errorText" class="bg-red-50 text-red-700 border border-red-200 rounded-xl px-4 py-3 text-sm">{{ errorText }}</div>
+          <div v-if="errorText" class="bg-red-50 text-red-700 border border-red-200 rounded-xl px-4 py-3 text-sm">
+            <div>{{ errorText }}</div>
+            <button class="mt-2 px-3 py-1 rounded-lg bg-red-100 text-red-700" @click="runTask" :disabled="isRunning || !adType">重试任务</button>
+          </div>
         </section>
 
         <section class="p-12 max-w-7xl mx-auto space-y-6" v-if="activeScreen === 'review'">
@@ -143,8 +163,8 @@
               <p class="text-on-surface-variant mt-2">对 AI 生成文案进行审核并派发。</p>
             </div>
             <div class="flex gap-3">
-              <button class="px-5 py-2.5 bg-surface-container-highest rounded-xl text-sm font-semibold">批量驳回</button>
-              <button class="px-5 py-2.5 signature-gradient text-white rounded-xl text-sm font-semibold">全部通过 ({{ filteredReviewQueue.length }})</button>
+              <button class="px-5 py-2.5 bg-surface-container-highest rounded-xl text-sm font-semibold" @click="notifySoon('批量驳回功能待接入')">批量驳回</button>
+              <button class="px-5 py-2.5 signature-gradient text-white rounded-xl text-sm font-semibold" @click="notifySoon(`已标记 ${filteredReviewQueue.length} 条为通过（演示）`)">全部通过 ({{ filteredReviewQueue.length }})</button>
             </div>
           </div>
           <div class="space-y-4">
@@ -162,7 +182,7 @@
                 <div class="text-xs text-on-surface-variant">投放方向：{{ item.focus }}</div>
               </div>
               <div class="flex items-center">
-                <button class="w-12 h-12 rounded-full signature-gradient text-white flex items-center justify-center">
+                <button class="w-12 h-12 rounded-full signature-gradient text-white flex items-center justify-center" @click="dispatchAd(item)">
                   <span class="material-symbols-outlined active-fill">send</span>
                 </button>
               </div>
@@ -238,7 +258,7 @@
             <div class="lg:col-span-7 bg-surface-container-lowest p-8 rounded-xl">
               <div class="flex justify-between items-center mb-5">
                 <h4 class="text-xl font-headline font-bold text-primary">话题频率</h4>
-                <button class="bg-surface-container-low p-2 rounded-lg text-slate-500"><span class="material-symbols-outlined">filter_list</span></button>
+                <button class="bg-surface-container-low p-2 rounded-lg text-slate-500" @click="notifySoon('筛选功能待接入')"><span class="material-symbols-outlined">filter_list</span></button>
               </div>
               <div class="min-h-[280px] flex flex-wrap gap-x-6 gap-y-3 items-center justify-center">
                 <span v-for="tag in analyticsTopics" :key="tag.word" :class="tag.className">{{ tag.word }}</span>
@@ -257,32 +277,29 @@
           </div>
         </section>
       </main>
+
+      <div v-if="toastText" class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-sm px-4 py-2 rounded-lg shadow-lg z-50">
+        {{ toastText }}
+      </div>
 </template>
 
 <script>
-async function requestJson(url, options) {
-  const response = await fetch(url, options);
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(typeof data === "object" ? JSON.stringify(data) : String(data));
-  }
-  return data;
-}
-
-async function waitTaskDone(taskId, onPoll, maxAttempts = 180, sleepMs = 3000) {
-  for (let i = 0; i < maxAttempts; i += 1) {
-    const task = await requestJson(`/api/ad-intel/task/${taskId}`);
-    if (onPoll) onPoll(i + 1, task.status || "success");
-    if (!task.status || task.status === "success" || task.status === "failed") return task;
-    await new Promise((resolve) => setTimeout(resolve, sleepMs));
-  }
-  throw new Error("任务等待超时，请稍后再试");
-}
+import { AGENT6_CONFIG } from './config/agent6';
+import {
+  getTaskInsights,
+  getTaskMeta,
+  submitTask,
+  toUserErrorMessage,
+  waitTaskDone,
+} from './services/adIntelApi';
 
 export default {
   data() {
     return {
       stitchProjectId: "15597441123141010762",
+      modelName: AGENT6_CONFIG.modelName,
+      baseUrl: AGENT6_CONFIG.baseUrl,
+      apiPrefix: AGENT6_CONFIG.apiPrefix,
       navItems: [
         { key: "campaign", label: "任务配置", icon: "rocket_launch" },
         { key: "progress", label: "AI分析", icon: "psychology" },
@@ -300,6 +317,7 @@ export default {
       postLimit: 120,
       commentsPerPostLimit: 20,
       enableMediaDownload: false,
+      taskPhase: "idle",
       isRunning: false,
       taskStatusText: "未开始",
       errorText: "",
@@ -320,9 +338,58 @@ export default {
       sentimentBars: [],
       analyticsInsight: "等待任务数据生成洞察。",
       taskMeta: {},
+      toastText: "",
+      toastTimerId: null,
     };
   },
+  mounted() {
+    this.syncScreenFromPath();
+    window.addEventListener("popstate", this.handlePopState);
+  },
+  beforeUnmount() {
+    window.removeEventListener("popstate", this.handlePopState);
+    if (this.toastTimerId) {
+      clearTimeout(this.toastTimerId);
+      this.toastTimerId = null;
+    }
+  },
   computed: {
+    taskStateBadgeClass() {
+      const mapping = {
+        idle: "bg-surface-container-highest text-on-surface-variant",
+        running: "bg-secondary-container/40 text-secondary",
+        success: "bg-green-100 text-green-700",
+        error: "bg-red-100 text-red-700",
+      };
+      return mapping[this.taskPhase] || mapping.idle;
+    },
+    taskStateCardClass() {
+      const mapping = {
+        idle: "bg-surface-container-low text-on-surface-variant border border-surface-container-high",
+        running: "bg-secondary-container/20 text-secondary border border-secondary-container/60",
+        success: "bg-green-50 text-green-700 border border-green-200",
+        error: "bg-red-50 text-red-700 border border-red-200",
+      };
+      return mapping[this.taskPhase] || mapping.idle;
+    },
+    taskStateTitle() {
+      const mapping = {
+        idle: "等待启动",
+        running: "任务执行中",
+        success: "任务执行成功",
+        error: "任务执行失败",
+      };
+      return mapping[this.taskPhase] || mapping.idle;
+    },
+    taskStateDesc() {
+      const mapping = {
+        idle: "请填写广告主题并点击“开始AI分析”。",
+        running: `任务正在执行，已轮询 ${this.pollCount} 次，耗时 ${this.elapsedSeconds} 秒。`,
+        success: "已拿到任务结果，可以前往审核队列或数据看板继续处理。",
+        error: this.errorText || "任务失败，请检查参数后重试。",
+      };
+      return mapping[this.taskPhase] || mapping.idle;
+    },
     activeScreenTitle() {
       const mapping = {
         campaign: "任务配置",
@@ -346,6 +413,73 @@ export default {
     },
   },
   methods: {
+    screenPathMap() {
+      return {
+        campaign: "/campaign_setup",
+        progress: "/analysis_progress",
+        analytics: "/analytics_dashboard",
+        review: "/review_queue",
+      };
+    },
+    pathToScreen(pathname) {
+      const normalized = String(pathname || "").toLowerCase();
+      const mapping = {
+        "/campaign_setup": "campaign",
+        "/analysis_progress": "progress",
+        "/analytics_dashboard": "analytics",
+        "/review_queue": "review",
+      };
+      return mapping[normalized] || "campaign";
+    },
+    syncScreenFromPath() {
+      this.activeScreen = this.pathToScreen(window.location.pathname);
+    },
+    handlePopState() {
+      this.syncScreenFromPath();
+    },
+    setActiveScreen(screen) {
+      this.activeScreen = screen;
+      const nextPath = this.screenPathMap()[screen] || "/campaign_setup";
+      if (window.location.pathname !== nextPath) {
+        window.history.pushState({}, "", nextPath);
+      }
+    },
+    startNewCampaign() {
+      this.setActiveScreen("campaign");
+      this.setTaskPhase("idle");
+      this.errorText = "";
+      this.taskId = "";
+      this.pollCount = 0;
+      this.elapsedSeconds = 0;
+      this.notifySoon("已切换到新建任务");
+    },
+    notifySoon(message) {
+      this.toastText = message;
+      if (this.toastTimerId) {
+        clearTimeout(this.toastTimerId);
+      }
+      this.toastTimerId = setTimeout(() => {
+        this.toastText = "";
+        this.toastTimerId = null;
+      }, 1600);
+    },
+    saveDraft() {
+      this.notifySoon("草稿已保存（本地演示）");
+    },
+    dispatchAd(item) {
+      const author = item?.author || "目标用户";
+      this.notifySoon(`已派发给 ${author}（演示）`);
+    },
+    setTaskPhase(phase) {
+      const statusTextMap = {
+        idle: "未开始",
+        running: "运行中",
+        success: "成功",
+        error: "失败",
+      };
+      this.taskPhase = phase;
+      this.taskStatusText = statusTextMap[phase] || "未开始";
+    },
     parseKeywords() {
       if (!this.keywords) return [this.adType];
       const parsed = this.keywords
@@ -366,7 +500,7 @@ export default {
     async loadInsights() {
       if (!this.taskId) return;
       try {
-        const insights = await requestJson(`/api/ad-intel/task/${this.taskId}/insights`);
+        const insights = await getTaskInsights(this.taskId);
         this.reviewQueue = insights.review_queue || [];
         this.progressStep = insights.progress?.step || this.progressStep;
         this.progressMetrics = insights.progress?.metrics || this.progressMetrics;
@@ -376,13 +510,13 @@ export default {
         this.analyticsTopics = insights.analytics?.topic_cloud || [];
         this.analyticsInsight = insights.analytics?.insight || this.analyticsInsight;
       } catch (error) {
-        this.errorText = String(error);
+        this.errorText = toUserErrorMessage(error);
       }
     },
     async runTask() {
       if (!this.adType) return;
       this.errorText = "";
-      this.taskStatusText = "运行中";
+      this.setTaskPhase("running");
       this.isRunning = true;
       this.taskId = "";
       this.pollCount = 0;
@@ -393,7 +527,10 @@ export default {
       this.featureTable = [];
       this.reviewQueue = [];
       this.progressLogs = [];
+      this.progressStep = { current: 1, total: 4, label: "初始化", percent: 8 };
+      this.progressMetrics = { posts_scanned: 0, comments_read: 0 };
       this.startedAtMs = Date.now();
+      this.setActiveScreen("progress");
       const timer = setInterval(() => this.updateElapsed(), 1000);
       try {
         const payload = {
@@ -405,34 +542,39 @@ export default {
           enable_media_download: this.enableMediaDownload,
           time_range: "",
         };
-        const runData = await requestJson("/api/ad-intel/run", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
+        const runData = await submitTask(payload);
         this.taskId = runData.task_id || "";
         const task = await waitTaskDone(this.taskId, (count, status) => {
           this.pollCount = count;
-          if (status === "running") this.taskStatusText = "运行中";
+          if (status === "running") {
+            this.setTaskPhase("running");
+            this.progressStep = {
+              current: 3,
+              total: 4,
+              label: "内容合成中",
+              percent: Math.min(90, 20 + count * 3),
+            };
+          }
         });
-        const meta = await requestJson(`/api/ad-intel/task/${this.taskId}/meta`);
+        const meta = await getTaskMeta(this.taskId);
         this.taskMeta = meta;
         if (task.status && task.status !== "success") {
-          this.taskStatusText = "失败";
+          this.setTaskPhase("error");
           this.errorText = task.message || "任务失败";
           return;
         }
-        this.taskStatusText = "成功";
+        this.setTaskPhase("success");
+        this.progressStep = { current: 4, total: 4, label: "完成", percent: 100 };
         this.summary = task.summary || {};
         this.contentTable = task.content_table || [];
         this.commentTable = task.comment_table || [];
         this.featureTable = task.feature_table || [];
         await this.loadInsights();
-        this.activeScreen = "review";
+        this.setActiveScreen("review");
       } catch (error) {
-        this.taskStatusText = "失败";
-        this.errorText = String(error);
-        this.activeScreen = "progress";
+        this.setTaskPhase("error");
+        this.errorText = toUserErrorMessage(error);
+        this.setActiveScreen("progress");
       } finally {
         clearInterval(timer);
         this.updateElapsed();
