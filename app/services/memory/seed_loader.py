@@ -1,4 +1,4 @@
-"""从 data/seeds/ 目录读取种子文件并灌入 Chroma。"""
+"""从 assets/seeds/ 目录读取种子文件并灌入 Chroma。"""
 
 from __future__ import annotations
 
@@ -112,7 +112,7 @@ def load_seeds_into_memory(
     *,
     force: bool = False,
 ) -> dict[str, int]:
-    """把 data/seeds/ 的两份 jsonl 灌进 Chroma。返回每个 collection 的写入条数。
+    """把 assets/seeds/ 的两份 jsonl 灌进 Chroma。返回每个 collection 的写入条数。
 
     force=True 时会先删除同名 collection 再重建；否则默认 upsert。
     forbidden_phrases.txt 不进库，由 run_rag_agent 运行时按需读取。

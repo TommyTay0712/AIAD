@@ -48,7 +48,7 @@ def get_agent4_settings() -> Agent4Settings:
     load_dotenv()
     project_root = Path(__file__).resolve().parents[3]
     persist_dir = project_root / os.getenv("AGENT4_PERSIST_DIR", "data/chroma")
-    seed_dir = project_root / os.getenv("AGENT4_SEED_DIR", "data/seeds")
+    seed_dir = project_root / os.getenv("AGENT4_SEED_DIR", "assets/seeds")
     settings = Agent4Settings(
         project_root=project_root,
         persist_dir=persist_dir,

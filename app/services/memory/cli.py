@@ -90,7 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent4-memory")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_init = sub.add_parser("init", help="灌入 data/seeds/ 下的种子数据")
+    p_init = sub.add_parser("init", help="灌入 assets/seeds/ 下的种子数据")
     p_init.add_argument(
         "--force",
         action="store_true",
