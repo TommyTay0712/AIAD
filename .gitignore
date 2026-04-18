@@ -15,3 +15,5 @@ logs/
 stitch_/
 frontend/stitch_assets/
 .trae/
+.cursor/
+.model_cache/

@@ -1,0 +1,3 @@
+{"id": "pk-synth-001", "brand": "示例品牌", "product": "防晒喷雾", "point": "水润不假白，敏感肌也可用", "evidence": "合成占位，非真实卖点", "evidence_type": "合成样本", "allowed_claim": true, "platform": "小红书", "scene_fit": ["海边", "通勤", "日常"]}
+{"id": "pk-synth-002", "brand": "示例品牌", "product": "防晒喷雾", "point": "户外补涂方便，成膜快", "evidence": "合成占位，非真实卖点", "evidence_type": "合成样本", "allowed_claim": true, "platform": "小红书", "scene_fit": ["海边", "露营", "户外"]}
+{"id": "pk-synth-003", "brand": "示例品牌", "product": "防晒喷雾", "point": "酒精含量较高，靠近眼周请谨慎", "evidence": "合成占位，仅示例 allowed_claim=false", "evidence_type": "风险提示", "allowed_claim": false, "platform": "小红书", "scene_fit": ["海边"]}
