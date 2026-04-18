@@ -49,6 +49,19 @@ param(
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 
+# 中文 Windows 默认控制台代码页是 936 (GBK)，而脚本会强制子进程 Python
+# 用 UTF-8（PYTHONIOENCODING=utf-8）输出日志与 JSON。两边不一致时 Python
+# 的中文日志会被 GBK 错误解码成"鍔犺浇"这类乱码。
+# 这里把控制台 I/O 编码切到 UTF-8，保证整条管道统一。
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    [Console]::InputEncoding  = [System.Text.Encoding]::UTF8
+    $OutputEncoding           = [System.Text.Encoding]::UTF8
+} catch {
+    # 极简环境可能没有 System.Console，降级忽略即可；此时中文可能仍有乱码，
+    # 但不影响脚本本身的执行结果（exit code 仍然正确）。
+}
+
 function Write-Step {
     param([int]$Index, [int]$Total, [string]$Message)
     Write-Host ""
@@ -58,6 +71,31 @@ function Write-Step {
 function Write-Ok     { param([string]$M) Write-Host "      ✓ $M" -ForegroundColor Green }
 function Write-Info   { param([string]$M) Write-Host "      · $M" -ForegroundColor Gray }
 function Write-WarnEx { param([string]$M) Write-Host "      ! $M" -ForegroundColor Yellow }
+
+# 执行外部命令（如 python），把 stderr 合并到 stdout 按普通文本打印，
+# 避免 PowerShell 5.1 把 Python 的 INFO 日志当作 NativeCommandError 红色报错。
+function Invoke-Native {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(ValueFromRemainingArguments)][string[]]$Arguments,
+        [string]$FailMessage = "命令执行失败"
+    )
+    $oldPref = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $FilePath @Arguments 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) {
+                Write-Host $_.Exception.Message
+            } else {
+                Write-Host $_
+            }
+        }
+        $rc = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $oldPref
+    }
+    if ($rc -ne 0) { throw "$FailMessage (exit $rc)" }
+}
 
 # ---------- 解析 Python ----------
 if (-not $Python) {
@@ -103,6 +141,9 @@ if ($NoMirror) {
     Write-Info "HF_ENDPOINT = https://hf-mirror.com"
     $PipIndex = @("-i", "https://pypi.tuna.tsinghua.edu.cn/simple")
 }
+# 强制子进程 Python 也走 UTF-8，避免 cli probe 打印中文 JSON 时踩 GBK 编码
+$env:PYTHONIOENCODING = "utf-8"
+$env:PYTHONUTF8 = "1"
 Write-Ok "HF_HOME     = $ModelCacheDir"
 
 # ---------- Step 3: 安装依赖 ----------
@@ -110,10 +151,8 @@ Write-Step 3 $TotalSteps "安装 Python 依赖..."
 if ($SkipInstall) {
     Write-Info "已跳过 (SkipInstall 模式)"
 } else {
-    & $Python -m pip install --upgrade pip @PipIndex
-    if ($LASTEXITCODE -ne 0) { throw "pip upgrade 失败" }
-    & $Python -m pip install -r (Join-Path $ProjectRoot "requirements.txt") @PipIndex
-    if ($LASTEXITCODE -ne 0) { throw "pip install requirements.txt 失败" }
+    Invoke-Native -FilePath $Python -Arguments (@("-m", "pip", "install", "--upgrade", "pip") + $PipIndex) -FailMessage "pip upgrade 失败"
+    Invoke-Native -FilePath $Python -Arguments (@("-m", "pip", "install", "-r", (Join-Path $ProjectRoot "requirements.txt")) + $PipIndex) -FailMessage "pip install requirements.txt 失败"
     Write-Ok "依赖安装完成"
 }
 
@@ -140,8 +179,7 @@ Push-Location $ProjectRoot
 try {
     $initArgs = @("-m", "app.services.memory.cli", "init")
     if ($Force) { $initArgs += "--force" }
-    & $Python @initArgs
-    if ($LASTEXITCODE -ne 0) { throw "cli init 失败" }
+    Invoke-Native -FilePath $Python -Arguments $initArgs -FailMessage "cli init 失败"
     Write-Ok "种子灌库完成"
 } finally {
     Pop-Location
@@ -151,15 +189,17 @@ try {
 Write-Step 6 $TotalSteps "冒烟校验..."
 Push-Location $ProjectRoot
 try {
-    & $Python -m app.services.memory.cli status
-    if ($LASTEXITCODE -ne 0) { throw "cli status 失败" }
+    Invoke-Native -FilePath $Python -Arguments @("-m", "app.services.memory.cli", "status") -FailMessage "cli status 失败"
 
     $ProbeFixture = "tests/memory/fixtures/mock_global_state_beach.json"
     if (Test-Path (Join-Path $ProjectRoot $ProbeFixture)) {
         Write-Info "运行 probe 冒烟 (海边场景)..."
-        & $Python -m app.services.memory.cli probe $ProbeFixture | Out-Null
-        if ($LASTEXITCODE -ne 0) { Write-WarnEx "probe 返回非 0 状态，但不致命" }
-        else { Write-Ok "probe OK" }
+        try {
+            Invoke-Native -FilePath $Python -Arguments @("-m", "app.services.memory.cli", "probe", $ProbeFixture) -FailMessage "probe 返回非 0"
+            Write-Ok "probe OK"
+        } catch {
+            Write-WarnEx "probe 返回非 0 状态，但不致命: $($_.Exception.Message)"
+        }
     }
 } finally {
     Pop-Location

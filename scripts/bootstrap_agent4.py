@@ -26,6 +26,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Windows 中文终端默认 stdout=cp936/gbk，无法输出 Unicode 符号 (✓ ✗ · !)。
+# 这里把当前进程 stdout/stderr 强制切到 UTF-8，errors=replace 作为保险。
+for _stream_name in ("stdout", "stderr"):
+    _stream = getattr(sys, _stream_name, None)
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 ROOT = Path(__file__).resolve().parents[1]
 HF_MIRROR = "https://hf-mirror.com"
 PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
@@ -66,9 +76,22 @@ def fail(msg: str, code: int = 1) -> "None":
     sys.exit(code)
 
 
+def _child_env() -> dict[str, str]:
+    """把当前进程 env 复制一份，强制子进程 Python 也用 UTF-8 stdout。"""
+    env = os.environ.copy()
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUTF8", "1")
+    return env
+
+
 def run(cmd: list[str], **kwargs) -> None:
     info("$ " + " ".join(cmd))
-    result = subprocess.run(cmd, cwd=kwargs.pop("cwd", ROOT), **kwargs)
+    result = subprocess.run(
+        cmd,
+        cwd=kwargs.pop("cwd", ROOT),
+        env=kwargs.pop("env", _child_env()),
+        **kwargs,
+    )
     if result.returncode != 0:
         fail(f"命令失败（退出码 {result.returncode}）: {' '.join(cmd)}")
 
@@ -181,6 +204,9 @@ def main() -> int:
             cwd=ROOT,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=_child_env(),
         )
         if result.returncode == 0:
             ok("probe OK")
