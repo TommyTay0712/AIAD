@@ -7,6 +7,8 @@ from langgraph.graph import END, START, StateGraph
 
 from app.services.copywriter import LLMGateway, run_copywriter_agent
 from app.services.state_builder import build_global_state
+from app.services.agent3_context_nlp import ContextNLPAgent
+from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -106,12 +108,59 @@ class AgentGraphState(TypedDict, total=False):
     retry_count: int
     eval_score: float
 
-    # Agent 产物（占位）
+    # Agent 产物
     harvest_result: dict[str, Any]
     vision_report: dict[str, Any]
     comment_context: dict[str, Any]
     rag_result: dict[str, Any]
     copy_result: dict[str, Any]
+
+
+def _extract_comments_from_state(state: AgentGraphState) -> list[dict[str, Any]]:
+    """从 state 中提取评论列表。"""
+    # 方式1：从 harvest_result 中获取
+    harvest = state.get("harvest_result", {})
+    if isinstance(harvest, dict):
+        comments = harvest.get("comments", [])
+        if comments:
+            return comments
+
+    # 方式2：从 raw_data 中获取
+    raw_data = state.get("raw_data", {})
+    if isinstance(raw_data, dict):
+        comments = raw_data.get("comments", [])
+        if comments:
+            return comments
+
+    # 方式3：直接字段
+    if "comments" in state:
+        return state["comments"]
+
+    return []
+
+
+def _map_emotion_to_label(emotion_text: str) -> str:
+    """中文情绪描述 -> 简短标签。"""
+    text = emotion_text.lower()
+    if any(w in text for w in ["积极", "正面", "兴趣", "喜欢"]):
+        return "positive"
+    if any(w in text for w in ["消极", "负面", "不满", "批评"]):
+        return "negative"
+    return "neutral"
+
+
+def _placeholder_agent3_output(state: AgentGraphState) -> AgentGraphState:
+    return {
+        "comment_context": {
+            "request_id": state.get("request_id", ""),
+            "sentiment": {"label": "neutral"},
+            "themes": [],
+            "pain_points": [],
+            "language_style": {"emoji_heavy": False},
+            "ad_angle": "",
+            "placeholder": True,
+        }
+    }
 
 
 def _node_agent1_data_harvester(state: AgentGraphState) -> AgentGraphState:
@@ -120,15 +169,12 @@ def _node_agent1_data_harvester(state: AgentGraphState) -> AgentGraphState:
     post_urls = state.get("post_urls", [])
     logger.info("Agent1 DataHarvester start request_id=%s post_urls=%s", request_id, len(post_urls))
 
-    # 占位产物：只返回最小必需结构，供下游继续跑通编排
     harvest_result = {
         "request_id": request_id,
         "posts": [],
         "errors": [],
         "harvest_meta": {"placeholder": True},
     }
-    # 注意：LangGraph 并行分支下若重复写同一个 key 会报并发更新错误。
-    # 因此节点输出只返回“本节点新增/更新”的字段，避免把整个 state 原样回写。
     return {
         "status": "success",
         "error_code": None,
@@ -151,16 +197,42 @@ def _node_agent2_vision_analyst(state: AgentGraphState) -> AgentGraphState:
 
 
 def _node_agent3_context_nlp(state: AgentGraphState) -> AgentGraphState:
-    """Agent 3（占位）：评论区语境与情感。"""
-    logger.info("Agent3 ContextNLP start request_id=%s", state.get("request_id", ""))
+    """Agent 3：评论区语境与情感分析（真实 LLM 调用）。"""
+    request_id = state.get("request_id", "")
+    logger.info("Agent3 ContextNLP start request_id=%s", request_id)
+
+    # 提取评论
+    comments = _extract_comments_from_state(state)
+    if not comments:
+        logger.warning("Agent3 未找到评论数据，返回占位结果")
+        return _placeholder_agent3_output(state)
+
+    # 初始化 Agent3
+    settings = get_settings()
+    if settings.llm_provider in ("", "disabled", "none", "null"):
+        logger.warning("LLM 未配置，Agent3 使用占位输出")
+        return _placeholder_agent3_output(state)
+
+    agent = ContextNLPAgent(settings)
+
+    try:
+        analysis = agent.analyze_comments(comments)
+    except Exception as e:
+        logger.error("Agent3 调用失败: %s", e, exc_info=True)
+        return _placeholder_agent3_output(state)
+
+    # 映射结果
     comment_context = {
-        "request_id": state.get("request_id", ""),
-        "sentiment": {"label": "neutral"},
-        "themes": [],
-        "pain_points": [],
-        "language_style": {"emoji_heavy": False},
-        "ad_angle": "",
-        "placeholder": True,
+        "request_id": request_id,
+        "sentiment": {"label": _map_emotion_to_label(analysis.get("main_emotion", ""))},
+        "themes": analysis.get("pain_points", [])[:3],
+        "pain_points": analysis.get("pain_points", []),
+        "language_style": {
+            "description": analysis.get("language_style", ""),
+            "emoji_heavy": any(e in analysis.get("language_style", "") for e in ["emoji", "表情", "doge"]),
+        },
+        "ad_angle": analysis.get("best_angle_suggestion", ""),
+        "placeholder": False,
     }
     return {"comment_context": comment_context}
 
@@ -203,7 +275,6 @@ def _node_agent5_copywriter(state: AgentGraphState) -> AgentGraphState:
 
 def _node_eval_copy(state: AgentGraphState) -> AgentGraphState:
     """内部评估节点（占位）：给文案一个评分，触发条件路由。"""
-    # 占位：默认给高分，避免进入重写死循环；后续可替换为真实评估器
     eval_score = float(state.get("eval_score", 0.9))
     logger.info("EvalCopy request_id=%s score=%s", state.get("request_id", ""), eval_score)
     return {"eval_score": eval_score}
@@ -226,7 +297,7 @@ def _route_after_eval(state: AgentGraphState) -> str:
 
 
 def build_agent_workflow() -> Any:
-    """构建路线规划版 Agent1～5 的 LangGraph（仅占位节点）。"""
+    """构建路线规划版 Agent1～5 的 LangGraph（真实 Agent3 已接入）。"""
     graph = StateGraph(AgentGraphState)
     graph.add_node("node_data_harvester", _node_agent1_data_harvester)
     graph.add_node("node_vision_analyst", _node_agent2_vision_analyst)
@@ -237,7 +308,6 @@ def build_agent_workflow() -> Any:
 
     graph.add_edge(START, "node_data_harvester")
 
-    # harvest 失败提前结束；否则 fan-out 到 vision/context
     graph.add_conditional_edges(
         "node_data_harvester",
         _route_after_harvest,
@@ -245,14 +315,12 @@ def build_agent_workflow() -> Any:
     )
     graph.add_edge("node_data_harvester", "node_context_nlp")
 
-    # fan-in 到 rag（vision/context 都完成后再检索）
     graph.add_edge("node_vision_analyst", "node_rag_retrieve")
     graph.add_edge("node_context_nlp", "node_rag_retrieve")
 
     graph.add_edge("node_rag_retrieve", "node_copywriter")
     graph.add_edge("node_copywriter", "node_eval_copy")
 
-    # 文案低分重写
     graph.add_conditional_edges(
         "node_eval_copy",
         _route_after_eval,
@@ -262,7 +330,7 @@ def build_agent_workflow() -> Any:
 
 
 def run_agent_workflow(initial_state: AgentGraphState) -> AgentGraphState:
-    """执行路线规划版 LangGraph（仅占位节点）。"""
+    """执行路线规划版 LangGraph。"""
     chain = cast(Any, build_agent_workflow())
     result = cast(AgentGraphState, chain.invoke(initial_state))
     return result
