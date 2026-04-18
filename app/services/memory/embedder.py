@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 import httpx
 
@@ -30,12 +30,20 @@ class Embedder(Protocol):
         ...
 
 
+class _SentenceTransformerLike(Protocol):
+    def encode(self, *args: Any, **kwargs: Any) -> Any:
+        ...
+
+    def get_sentence_embedding_dimension(self) -> int:
+        ...
+
+
 class LocalBgeEmbedder:
     """本地 sentence-transformers 实现。默认模型 BAAI/bge-small-zh-v1.5。"""
 
     def __init__(self, model_name: str) -> None:
         self.model_name = model_name
-        self._model = None
+        self._model: _SentenceTransformerLike | None = None
         self._dim: int | None = None
 
     def _ensure_loaded(self) -> None:
@@ -48,7 +56,7 @@ class LocalBgeEmbedder:
                 "未安装 sentence-transformers；请先 pip install sentence-transformers"
             ) from exc
         logger.info("加载 embedding 模型 model=%s (首次加载耗时较长)", self.model_name)
-        self._model = SentenceTransformer(self.model_name)
+        self._model = cast(_SentenceTransformerLike, SentenceTransformer(self.model_name))
         self._dim = int(self._model.get_sentence_embedding_dimension())
         logger.info("embedding 模型加载完成 dim=%s", self._dim)
 
