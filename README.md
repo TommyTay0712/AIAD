@@ -42,30 +42,46 @@ git pull --rebase
 git submodule update --init --recursive
 ```
 
-### 1) AIAD 后端 + 前端（同一个服务）
+### 1) 启动 AIAD 后端与前端
 
-说明：前端是 Vue 单页，由 FastAPI 静态托管，所以只需要启动一个服务。
+**后端服务 (FastAPI)**：
+负责提供 API 接口以及 LangGraph 智能体工作流编排。
 
-安装依赖：
-
+安装依赖并启动服务：
 ```bash
 E:\AIAD\.conda\aiad\python.exe -m pip install -r requirements.txt
-```
-
-启动服务：
-
-```bash
 E:\AIAD\.conda\aiad\python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+后端接口文档访问：http://127.0.0.1:8000/docs
 
+**前端服务 (Vue3 + Vite)**：
+前端工程独立放置于 `frontend/` 目录中。
+
+启动前端开发服务器：
+```bash
+cd frontend
+npm install
+npx vite --host 0.0.0.0 --port 5173
+```
+前端页面访问：http://127.0.0.1:5173/
+
+### 1.1) 智能体并行开发与环境初始化
+
+团队采用 8 人并行开发模式，依托本地 `mock_state.json` 与标准数据字典彻底解耦。具体接口与数据流转规范请参考：[《智能体接口与并行开发规范》](docs/智能体接口与并行开发规范.md)。
+
+**Agent 4 (RAG & Memory) 快速初始化**：
+针对 Agent 4 负责的 Chroma 向量数据库，执行以下脚本即可一键安装嵌入模型、初始化库并灌入预设对标文案种子。
+```powershell
+# 在 Windows PowerShell 中执行
+.\scripts\bootstrap_agent4.ps1 -Python E:\AIAD\.conda\aiad\python.exe
+```
+执行完毕后，可通过以下命令验证 Agent 4 检索状态：
+```bash
+E:\AIAD\.conda\aiad\python.exe -m app.services.memory.cli status
+E:\AIAD\.conda\aiad\python.exe -m app.services.memory.cli probe tests/memory/fixtures/mock_global_state_beach.json
 ```
 
-访问页面：
-
-```text
-http://127.0.0.1:8000/
-```
-
-### 1.1) AIAD 环境初始化（Conda）
+### 1.2) AIAD 环境初始化（Conda）
 
 如需在本地或 CI 中复用统一的 AIAD 环境，可直接使用根目录的 `environment.aiad.yml`：
 
@@ -81,7 +97,7 @@ conda env update -f environment.aiad.yml --prune
 conda activate aiad
 ```
 
-### 1.2) 本地校验命令
+### 1.3) 本地校验命令
 
 激活 `aiad` 环境后，执行：
 
