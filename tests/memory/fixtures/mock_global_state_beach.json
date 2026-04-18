@@ -1,0 +1,20 @@
+{
+  "request_info": {
+    "post_url": "",
+    "product_info": "示例防晒喷雾，水润不假白，敏感肌可用",
+    "target_style": "测评风"
+  },
+  "vision_analysis": {
+    "scene": "海边/沙滩",
+    "vibe": "轻松/真实分享",
+    "detected_items": ["草帽", "墨镜"]
+  },
+  "nlp_analysis": {
+    "main_emotion": "积极",
+    "pain_points": ["低敏诉求", "补涂便利"],
+    "language_style": "口语化"
+  },
+  "rag_references": [],
+  "final_ads": [],
+  "review_score": 0
+}

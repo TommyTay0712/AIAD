@@ -1,0 +1,20 @@
+{
+  "request_info": {
+    "post_url": "",
+    "product_info": "轻薄型日常防晒，主打水润底妆服帖",
+    "target_style": "科普风"
+  },
+  "vision_analysis": {
+    "scene": "通勤/日常",
+    "vibe": "中性/生活化",
+    "detected_items": []
+  },
+  "nlp_analysis": {
+    "main_emotion": "中性",
+    "pain_points": ["假白", "油腻"],
+    "language_style": "生活化"
+  },
+  "rag_references": [],
+  "final_ads": [],
+  "review_score": 0
+}
