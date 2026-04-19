@@ -162,6 +162,7 @@ class AgentGraphState(TypedDict, total=False):
     eval_score: float
 
     # Agent 产物
+    comments: list[dict[str, Any]]
     harvest_result: dict[str, Any]
     vision_report: dict[str, Any]
     comment_context: dict[str, Any]
