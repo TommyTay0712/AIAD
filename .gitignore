@@ -3,7 +3,9 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.DS_Store
 .conda/
+.ollama/
 .env
 data/
 ai_logs/
@@ -17,3 +19,5 @@ test.zip
 test_data/
 project-rule.md
 项目分工与路线规划.pdf
+.cursor/
+.model_cache/

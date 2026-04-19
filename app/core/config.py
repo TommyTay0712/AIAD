@@ -58,6 +58,13 @@ class Settings(BaseModel):
     vision_enable_mock_fallback: bool = Field(default=True)
     vision_max_media_count: int = Field(default=6)
     vision_video_frame_sample_count: int = Field(default=3)
+    llm_provider: str = Field(default="disabled")
+    llm_base_url: str = Field(default="http://127.0.0.1:11434/v1")
+    llm_model: str = Field(default="qwen2.5:3b-instruct")
+    llm_api_key: str = Field(default="local-dev")
+    llm_timeout_seconds: int = Field(default=120)
+    llm_temperature: float = Field(default=0.7)
+    llm_max_tokens: int = Field(default=1200)
 
 
 def get_settings() -> Settings:
@@ -89,6 +96,13 @@ def get_settings() -> Settings:
         in {"1", "true", "yes", "y"},
         vision_max_media_count=int(os.getenv("VISION_MAX_MEDIA_COUNT", "6")),
         vision_video_frame_sample_count=int(os.getenv("VISION_VIDEO_FRAME_SAMPLE_COUNT", "3")),
+        llm_provider=os.getenv("LLM_PROVIDER", "disabled"),
+        llm_base_url=os.getenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1"),
+        llm_model=os.getenv("LLM_MODEL", "qwen2.5:3b-instruct"),
+        llm_api_key=os.getenv("LLM_API_KEY", "local-dev"),
+        llm_timeout_seconds=int(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
+        llm_temperature=float(os.getenv("LLM_TEMPERATURE", "0.7")),
+        llm_max_tokens=int(os.getenv("LLM_MAX_TOKENS", "1200")),
     )
     settings.crawler_output_dir.mkdir(parents=True, exist_ok=True)
     settings.processed_output_dir.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,270 @@
+:root {
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #112b55;
+  background-color: #eef2f7;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: #eef2f7;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  min-height: 100vh;
+}
+
+.side-nav {
+  background: #e8edf4;
+  border-right: 1px solid #d8e1ee;
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.brand h1 {
+  font-size: 22px;
+  margin: 0;
+  color: #0f3e82;
+}
+
+.brand p {
+  margin: 4px 0 0;
+  color: #5c6f8f;
+  font-size: 12px;
+}
+
+.menu {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.menu-item {
+  text-decoration: none;
+  color: #2f4260;
+  padding: 10px 12px;
+  border-radius: 10px;
+  transition: background-color 0.2s ease;
+}
+
+.menu-item:hover {
+  background: #d8e4f4;
+}
+
+.menu-item.router-link-active {
+  background: #dbe9ff;
+  color: #0f3e82;
+  font-weight: 600;
+}
+
+.new-campaign-btn {
+  margin-top: auto;
+  border: 0;
+  border-radius: 10px;
+  background: #0b4a8f;
+  color: white;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.main-panel {
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+.top-bar {
+  background: #f4f7fb;
+  border-bottom: 1px solid #d8e1ee;
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.search-input {
+  width: min(480px, 100%);
+  border: 1px solid #d2ddeb;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #ffffff;
+}
+
+.top-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.icon-btn,
+.avatar-btn {
+  border: 1px solid #d2ddeb;
+  background: #ffffff;
+  border-radius: 10px;
+  padding: 8px 10px;
+  color: #253b59;
+}
+
+.page-content {
+  padding: 20px;
+}
+
+.page-section {
+  display: grid;
+  gap: 18px;
+}
+
+.page-title-wrap h2 {
+  margin: 0;
+  color: #0e3f7a;
+}
+
+.kicker {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #1c8c6d;
+}
+
+.subtitle {
+  margin: 6px 0 0;
+  color: #4d627f;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.metric-card,
+.panel {
+  background: #f7f9fc;
+  border: 1px solid #dce5f0;
+  border-radius: 14px;
+  padding: 16px;
+}
+
+.metric-card h3 {
+  margin: 8px 0 0;
+  color: #0e3f7a;
+  font-size: 28px;
+}
+
+.metric-card-accent {
+  background: #0b4a8f;
+  color: white;
+}
+
+.metric-card-accent h3,
+.metric-card-accent p {
+  color: white;
+}
+
+.panel-grid,
+.setup-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 12px;
+}
+
+.panel-large {
+  min-height: 220px;
+}
+
+.tag-cloud {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.tag-cloud span {
+  padding: 8px 10px;
+  border-radius: 999px;
+  background: #e2ebf8;
+  color: #13457d;
+}
+
+.field-label {
+  display: block;
+  margin-top: 12px;
+  margin-bottom: 6px;
+  color: #30496a;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.field-input {
+  width: 100%;
+  border: 1px solid #d2ddeb;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font: inherit;
+  background: #fff;
+}
+
+.field-area {
+  min-height: 100px;
+  resize: vertical;
+}
+
+.panel-accent {
+  background: #0b4a8f;
+  color: white;
+}
+
+.panel-accent h3,
+.panel-accent .mini-note,
+.panel-accent span,
+.panel-accent strong {
+  color: white;
+}
+
+.stats-row {
+  display: flex;
+  justify-content: space-between;
+  margin: 14px 0;
+}
+
+.mini-note {
+  margin-top: 20px;
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+@media (max-width: 1024px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  .side-nav {
+    border-right: 0;
+    border-bottom: 1px solid #d8e1ee;
+  }
+
+  .metric-grid,
+  .panel-grid,
+  .setup-grid {
+    grid-template-columns: 1fr;
+  }
+}
