@@ -3,6 +3,7 @@ from pathlib import Path
 
 import httpx
 
+from app.core.config import Settings
 from app.services.chroma_store import ChromaStore
 from app.services.llm_gateway import OpenAICompatibleGateway
 from app.services.normalize import normalize_dataset
@@ -11,15 +12,20 @@ from app.workflows.data_graph import run_data_workflow
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
-    """写入测试用JSONL文件。"""
+    """写入测试用 JSONL 文件。"""
     lines = [json.dumps(row, ensure_ascii=False) for row in rows]
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def test_data_pipeline_normalize_and_graph(tmp_path: Path) -> None:
-    """验证标准化与LangGraph整理链路可正常输出。"""
+    """验证标准化与 LangGraph 整理链路可正常输出。"""
     content_file = tmp_path / "search_contents_demo.jsonl"
     comment_file = tmp_path / "search_comments_demo.jsonl"
+    media_root_dir = tmp_path / "media_root"
+    image_dir = media_root_dir / "images" / "n1"
+    image_dir.mkdir(parents=True, exist_ok=True)
+    (image_dir / "beach_hat.jpg").write_bytes(b"fake-image")
+
     _write_jsonl(
         content_file,
         [
@@ -50,30 +56,46 @@ def test_data_pipeline_normalize_and_graph(tmp_path: Path) -> None:
             }
         ],
     )
+
     normalized = normalize_dataset(
         platform="xhs",
         source_keyword="修护,敏感肌",
         content_file=content_file,
         comment_file=comment_file,
+        media_root_dir=media_root_dir,
+        product_info="敏感肌修护精华",
+    )
+    settings = Settings(
+        project_root=tmp_path,
+        aiad_python_exe=Path("/usr/bin/python3"),
+        media_crawler_dir=tmp_path / "vendor" / "MediaCrawler",
+        crawler_output_dir=tmp_path / "data" / "raw",
+        processed_output_dir=tmp_path / "data" / "processed",
+        logs_dir=tmp_path / "logs",
+        task_store_file=tmp_path / "data" / "tasks.json",
+        chroma_persist_dir=tmp_path / "data" / "chroma",
+        mediacrawler_python_exe=Path("/usr/bin/python3"),
+        playwright_browsers_path=tmp_path / ".ms-playwright",
+        vision_provider="mock",
+        vision_model="mock-vision",
     )
     request_info = {
         "post_url": "https://www.xiaohongshu.com/explore/n1",
         "product_info": "修护精华，特点：温和维稳，适合敏感肌",
         "target_style": "测评风",
     }
-    output = run_data_workflow(normalized, request_info=request_info)
+
+    output = run_data_workflow(normalized, request_info=request_info, settings=settings)
+
     assert output["summary"]["content_count"] == 1
     assert output["content_table"][0]["like_count"] == 12000
     assert output["comment_table"][0]["comment_id"] == "c1"
     assert "feature_table" in output
+    assert output["vision_analysis"]["source_media_count"] == 1
+    assert output["vision_analysis"]["model_provider"] == "mock"
     assert output["request_info"]["product_info"].startswith("修护精华")
     assert output["global_state"]["request_info"]["target_style"] == "测评风"
-    assert output["global_state"]["vision_analysis"]["scene"] in {
-        "通勤/日常",
-        "beauty_care",
-        "general",
-        "待补充场景",
-    }
+    assert output["global_state"]["vision_analysis"]["scene"] == "海边/沙滩"
     assert output["global_state"]["nlp_analysis"]["pain_points"]
     assert output["prompt_bundle"]["prompt_version"] == "agent5-v4"
     assert "system_prompt" in output["prompt_bundle"]
@@ -106,6 +128,7 @@ def test_build_global_state_matches_doc_shape(tmp_path: Path) -> None:
             }
         ],
     }
+
     state = build_global_state(
         normalized=normalized,
         request_info={
@@ -114,6 +137,7 @@ def test_build_global_state_matches_doc_shape(tmp_path: Path) -> None:
             "target_style": "测评风",
         },
     )
+
     assert set(state.keys()) == {
         "request_info",
         "raw_data",
@@ -178,6 +202,7 @@ def test_data_workflow_with_mock_llm_gateway() -> None:
         provider="local",
         transport=httpx.MockTransport(handler),
     )
+
     output = run_data_workflow(
         normalized,
         request_info={
@@ -187,6 +212,7 @@ def test_data_workflow_with_mock_llm_gateway() -> None:
         },
         llm_gateway=gateway,
     )
+
     assert output["llm_result"]["status"] == "success"
     assert output["final_ads"][0]["style"] == "测评风"
     assert output["global_state"]["final_ads"][0]["content"].startswith("海边这种场景")

@@ -65,7 +65,10 @@ class ContextNLPAgent:
                 temperature=0.1,
                 max_tokens=500,
             )
-            result = json.loads(response.choices[0].message.content)
+            content = response.choices[0].message.content
+            if not content:
+                raise ValueError("Agent3 返回空响应")
+            result = json.loads(content)
             logger.info("Agent3 分析成功")
             return result
         except Exception as e:

@@ -167,6 +167,8 @@ def normalize_dataset(
     content_file: Path,
     comment_file: Path | None,
     media_root_dir: Path | None = None,
+    product_info: str = "",
+    target_style: str = "自然安利风",
 ) -> dict[str, Any]:
     """将爬虫原始数据转换为标准化数据表。"""
     raw_contents = read_jsonl(content_file)
@@ -285,7 +287,29 @@ def normalize_dataset(
         "image_file_count": sum(len(row.get("image_local_paths", [])) for row in content_table),
         "video_file_count": sum(len(row.get("video_local_paths", [])) for row in content_table),
     }
+    primary_content = content_table[0] if content_table else {}
+    raw_media_paths = []
+    for content in content_table:
+        raw_media_paths.extend(content.get("media_local_paths", []))
+    raw_comments = [
+        {
+            "user": comment.get("ip_location") or "匿名用户",
+            "content": comment.get("comment_text", ""),
+            "likes": comment.get("like_count", 0),
+        }
+        for comment in comment_table
+    ]
     return {
+        "request_info": {
+            "post_url": primary_content.get("note_url", ""),
+            "product_info": product_info,
+            "target_style": target_style,
+        },
+        "raw_data": {
+            "post_content": primary_content.get("desc", ""),
+            "media_paths": raw_media_paths,
+            "comments": raw_comments,
+        },
         "summary": summary,
         "content_table": content_table,
         "comment_table": comment_table,

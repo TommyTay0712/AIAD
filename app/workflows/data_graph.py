@@ -5,40 +5,82 @@ from typing import Any, Literal, TypedDict, cast
 
 from langgraph.graph import END, START, StateGraph
 
+from app.core.config import Settings, get_settings
+from app.models.schemas import VisionAnalysis
+from app.services.agent3_context_nlp import ContextNLPAgent
 from app.services.copywriter import LLMGateway, run_copywriter_agent
 from app.services.state_builder import build_global_state
-from app.services.agent3_context_nlp import ContextNLPAgent
-from app.core.config import get_settings
+from app.services.vision import VisionAgent
 
 logger = logging.getLogger(__name__)
 
 
 class DataState(TypedDict):
     request_info: dict[str, Any]
+    raw_data: dict[str, Any]
     normalized: dict[str, Any]
+    vision_analysis: dict[str, Any]
     global_state: dict[str, Any]
     output: dict[str, Any]
     llm_gateway: LLMGateway | None
 
 
+def _prepare_state(state: DataState) -> DataState:
+    normalized = state["normalized"]
+    return {
+        "request_info": state.get("request_info") or normalized.get("request_info", {}),
+        "raw_data": normalized.get("raw_data", {}),
+        "normalized": normalized,
+        "vision_analysis": state.get("vision_analysis", {}),
+        "global_state": state.get("global_state", {}),
+        "output": state.get("output", {}),
+        "llm_gateway": state.get("llm_gateway"),
+    }
+
+
+def _vision_node_factory(settings: Settings):
+    agent = VisionAgent(settings)
+
+    def _vision_node(state: DataState) -> DataState:
+        media_paths = state.get("raw_data", {}).get("media_paths", [])
+        analysis = agent.analyze(media_paths if isinstance(media_paths, list) else [])
+        return {
+            "request_info": state["request_info"],
+            "raw_data": state["raw_data"],
+            "normalized": state["normalized"],
+            "vision_analysis": analysis.model_dump(),
+            "global_state": state.get("global_state", {}),
+            "output": state["output"],
+            "llm_gateway": state["llm_gateway"],
+        }
+
+    return _vision_node
+
+
 def _package_output(state: DataState) -> DataState:
+    vision_analysis = VisionAnalysis.model_validate(state.get("vision_analysis", {})).model_dump()
     global_state = build_global_state(
         normalized=state["normalized"],
         request_info=state["request_info"],
     )
+    global_state["vision_analysis"] = vision_analysis
+
     output = {
         "request_info": global_state["request_info"],
         "summary": state["normalized"]["summary"],
         "content_table": state["normalized"]["content_table"],
         "comment_table": state["normalized"]["comment_table"],
         "feature_table": state["normalized"]["feature_table"],
+        "vision_analysis": vision_analysis,
         "global_state": global_state,
         "final_ads": global_state["final_ads"],
         "review_score": global_state["review_score"],
     }
     return {
         "request_info": state["request_info"],
+        "raw_data": state["raw_data"],
         "normalized": state["normalized"],
+        "vision_analysis": vision_analysis,
         "global_state": global_state,
         "output": output,
         "llm_gateway": state["llm_gateway"],
@@ -56,9 +98,12 @@ def _generate_copy_prompt(state: DataState) -> DataState:
     output["llm_result"] = global_state.get("llm_result", {})
     output["final_ads"] = global_state.get("final_ads", [])
     output["review_score"] = global_state.get("review_score", 0)
+    output["vision_analysis"] = global_state.get("vision_analysis", output.get("vision_analysis", {}))
     return {
         "request_info": state["request_info"],
+        "raw_data": state["raw_data"],
         "normalized": state["normalized"],
+        "vision_analysis": state["vision_analysis"],
         "global_state": global_state,
         "output": output,
         "llm_gateway": state["llm_gateway"],
@@ -67,20 +112,28 @@ def _generate_copy_prompt(state: DataState) -> DataState:
 
 def run_data_workflow(
     normalized: dict[str, Any],
-    request_info: dict[str, Any],
+    request_info: dict[str, Any] | None = None,
+    settings: Settings | None = None,
     llm_gateway: LLMGateway | None = None,
 ) -> dict[str, Any]:
-    """执行基于LangGraph的数据整理流程。"""
+    """执行基于 LangGraph 的数据整理流程。"""
+    runtime_settings = settings or get_settings()
     graph = StateGraph(DataState)
+    graph.add_node("prepare_state", _prepare_state)
+    graph.add_node("vision_analysis", _vision_node_factory(runtime_settings))
     graph.add_node("package_output", _package_output)
     graph.add_node("generate_copy_prompt", _generate_copy_prompt)
-    graph.add_edge(START, "package_output")
+    graph.add_edge(START, "prepare_state")
+    graph.add_edge("prepare_state", "vision_analysis")
+    graph.add_edge("vision_analysis", "package_output")
     graph.add_edge("package_output", "generate_copy_prompt")
     graph.add_edge("generate_copy_prompt", END)
     chain = graph.compile()
     initial_state: DataState = {
-        "request_info": request_info,
+        "request_info": request_info or normalized.get("request_info", {}),
+        "raw_data": normalized.get("raw_data", {}),
         "normalized": normalized,
+        "vision_analysis": {},
         "global_state": {},
         "output": {},
         "llm_gateway": llm_gateway,
@@ -109,6 +162,7 @@ class AgentGraphState(TypedDict, total=False):
     eval_score: float
 
     # Agent 产物
+    comments: list[dict[str, Any]]
     harvest_result: dict[str, Any]
     vision_report: dict[str, Any]
     comment_context: dict[str, Any]
