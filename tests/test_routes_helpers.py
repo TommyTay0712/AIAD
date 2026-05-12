@@ -57,6 +57,36 @@ def test_build_review_queue_uses_author_and_default_comment_id() -> None:
     assert queue[1]["focus"] == "痛点回应"
 
 
+def test_build_review_queue_prefers_priority_comment_table() -> None:
+    payload = {
+        "content_table": [
+            {"note_id": "n1", "author_name": "博主A", "like_count": 1000},
+            {"note_id": "n2", "author_name": "博主B", "like_count": 10},
+        ],
+        "comment_table": [
+            {"note_id": "n2", "comment_id": "raw-first", "comment_text": "原始第一条"}
+        ],
+        "priority_comment_table": [
+            {
+                "note_id": "n1",
+                "comment_id": "priority-first",
+                "comment_text": "优先高赞评论",
+                "comment_like_count": 88,
+                "post_like_count": 1000,
+                "selection_rank": 1,
+                "selection_reason": "高赞帖子 + 高赞评论",
+            }
+        ],
+    }
+
+    queue = _build_review_queue(payload)
+
+    assert [item["comment_id"] for item in queue] == ["priority-first"]
+    assert queue[0]["comment_like_count"] == 88
+    assert queue[0]["post_like_count"] == 1000
+    assert queue[0]["selection_reason"] == "高赞帖子 + 高赞评论"
+
+
 def test_build_topic_cloud_filters_stopwords_and_limits_words() -> None:
     payload = {
         "feature_table": [{"topic_cluster": "beauty_care"}],

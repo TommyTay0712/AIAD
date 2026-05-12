@@ -164,12 +164,21 @@
             <div>
               <p class="text-secondary font-bold text-xs uppercase tracking-widest">待审批</p>
               <h3 class="font-headline text-3xl font-extrabold text-primary">审核队列</h3>
-              <p class="text-on-surface-variant mt-2">对 AI 生成文案进行审核并派发。</p>
+              <p class="text-on-surface-variant mt-2">对 AI 生成文案进行审核并复制。</p>
             </div>
             <div class="flex gap-3">
-              <button class="px-5 py-2.5 bg-surface-container-highest rounded-xl text-sm font-semibold" @click="notifySoon('批量驳回功能待接入')">批量驳回</button>
-              <button class="px-5 py-2.5 signature-gradient text-white rounded-xl text-sm font-semibold" @click="notifySoon(`已标记 ${filteredReviewQueue.length} 条为通过（演示）`)">全部通过 ({{ filteredReviewQueue.length }})</button>
+              <button class="px-5 py-2.5 bg-surface-container-highest rounded-xl text-sm font-semibold flex items-center gap-2 disabled:opacity-50" @click="loadInsights" :disabled="!taskId">
+                <span class="material-symbols-outlined text-sm">refresh</span>
+                刷新评论
+              </button>
+              <button class="px-5 py-2.5 signature-gradient text-white rounded-xl text-sm font-semibold" @click="notifySoon(`当前优先队列 ${filteredReviewQueue.length} 条`)">优先队列 ({{ filteredReviewQueue.length }})</button>
             </div>
+          </div>
+          <div v-if="commentSelectionMeta.selected_comments" class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs text-on-surface-variant">
+            <div class="bg-surface-container-lowest rounded-xl p-3">入选评论：<span class="font-bold text-primary">{{ commentSelectionMeta.selected_comments }}</span></div>
+            <div class="bg-surface-container-lowest rounded-xl p-3">覆盖帖子：<span class="font-bold text-primary">{{ commentSelectionMeta.covered_posts }}</span></div>
+            <div class="bg-surface-container-lowest rounded-xl p-3">有效评论：<span class="font-bold text-primary">{{ commentSelectionMeta.valid_comments }}</span></div>
+            <div class="bg-surface-container-lowest rounded-xl p-3">策略：<span class="font-bold text-primary">{{ commentSelectionMeta.strategy_version }}</span></div>
           </div>
           <!-- 逐评论后台生成进度横幅 -->
           <div
@@ -203,11 +212,11 @@
                   <span class="text-xs text-secondary font-bold">{{ item.predicted_affinity }}% 匹配度</span>
                 </div>
                 <div class="bg-primary/5 p-4 rounded-xl text-sm">{{ item.ad_text }}</div>
-                <div class="text-xs text-on-surface-variant">投放方向：{{ item.focus }}</div>
+                <div class="text-xs text-on-surface-variant">投放方向：{{ item.focus }} · 评论赞 {{ item.comment_like_count || 0 }} · 帖子赞 {{ item.post_like_count || 0 }} · {{ item.selection_reason || "优先评论" }}</div>
               </div>
               <div class="flex items-center">
                 <button class="w-12 h-12 rounded-full signature-gradient text-white flex items-center justify-center" @click="dispatchAd(item)">
-                  <span class="material-symbols-outlined active-fill">send</span>
+                  <span class="material-symbols-outlined active-fill">content_copy</span>
                 </button>
               </div>
             </div>
@@ -394,11 +403,16 @@ export default {
       commentAdsStatus: "",   // pending | processing | complete | error
       commentAdsProgress: { done: 0, total: 0 },
       commentAdsPollTimer: null,
+      commentSelectionMeta: {},
     };
   },
   mounted() {
     this.syncScreenFromPath();
     window.addEventListener("popstate", this.handlePopState);
+    const taskIdFromUrl = new URLSearchParams(window.location.search).get("task_id");
+    if (taskIdFromUrl) {
+      this.loadExistingTask(taskIdFromUrl);
+    }
   },
   beforeUnmount() {
     window.removeEventListener("popstate", this.handlePopState);
@@ -509,6 +523,7 @@ export default {
       this.taskId = "";
       this.pollCount = 0;
       this.elapsedSeconds = 0;
+      this.commentSelectionMeta = {};
       this.notifySoon("已切换到新建任务");
     },
     notifySoon(message) {
@@ -524,9 +539,31 @@ export default {
     saveDraft() {
       this.notifySoon("草稿已保存（本地演示）");
     },
-    dispatchAd(item) {
-      const author = item?.author || "目标用户";
-      this.notifySoon(`已派发给 ${author}（演示）`);
+    async dispatchAd(item) {
+      const text = item?.ad_text || "";
+      if (!text) {
+        this.notifySoon("暂无可复制文案");
+        return;
+      }
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+          this.notifySoon("AI 文案已复制");
+          return;
+        }
+      } catch {
+        // 降级到传统复制方式
+      }
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "true");
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+      this.notifySoon("AI 文案已复制");
     },
     setTaskPhase(phase) {
       const statusTextMap = {
@@ -568,6 +605,7 @@ export default {
       try {
         const insights = await getTaskInsights(this.taskId);
         this.reviewQueue = insights.review_queue || [];
+        this.commentSelectionMeta = insights.comment_selection_meta || {};
         this.commentAdsStatus = insights.comment_ads_status || "";
         this.commentAdsProgress = insights.comment_ads_progress || { done: 0, total: 0 };
         this.progressStep = insights.progress?.step || this.progressStep;
@@ -580,6 +618,18 @@ export default {
       } catch (error) {
         this.errorText = toUserErrorMessage(error);
       }
+    },
+    async loadExistingTask(taskId) {
+      this.taskId = taskId;
+      this.errorText = "";
+      this.setTaskPhase("success");
+      this.setActiveScreen("review");
+      try {
+        this.taskMeta = await getTaskMeta(taskId);
+      } catch {
+        this.taskMeta = {};
+      }
+      await this.loadInsights();
     },
     _startCommentAdsPolling() {
       if (this.commentAdsPollTimer) return;
@@ -604,6 +654,7 @@ export default {
       this.commentTable = [];
       this.featureTable = [];
       this.reviewQueue = [];
+      this.commentSelectionMeta = {};
       this.streamingComments = [];
       this.progressLogs = [];
       this.progressStep = { current: 1, total: 4, label: "初始化", percent: 5 };

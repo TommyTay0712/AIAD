@@ -74,12 +74,18 @@ export type ReviewItem = {
     predicted_affinity: number
     focus: string
     sentiment: string
+    comment_like_count?: number
+    post_like_count?: number
+    selection_rank?: number
+    selection_reason?: string
 }
 
 export type TaskStreamEvent =
     | { type: 'progress'; stage: string; percent: number; message: string }
     | { type: 'crawl_done'; content_count: number; comment_count: number }
     | { type: 'comment'; data: ReviewItem }
+    | { type: 'comment_ads_partial'; comment_ads: Record<string, string> }
+    | { type: 'crawler_log'; line: string }
     | { type: 'agent_result'; agent: 'vision' | 'context' | 'rag' | 'copywriter'; data: unknown }
     | { type: 'done'; task_id: string }
     | { type: 'error'; message: string }
