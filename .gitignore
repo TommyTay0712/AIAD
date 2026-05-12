@@ -21,3 +21,5 @@ project-rule.md
 项目分工与路线规划.pdf
 .cursor/
 .model_cache/
+.claude/
+CLAUDE.md
