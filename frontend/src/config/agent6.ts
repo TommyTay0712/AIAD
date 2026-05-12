@@ -9,6 +9,7 @@ export const AGENT6_ENDPOINTS = {
     taskStatus: (taskId: string) => `/task/${taskId}`,
     taskMeta: (taskId: string) => `/task/${taskId}/meta`,
     taskInsights: (taskId: string) => `/task/${taskId}/insights`,
+    taskStream: (taskId: string) => `/task/${taskId}/stream`,
 } as const
 
 export function buildAgent6Url(path: string): string {

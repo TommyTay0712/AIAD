@@ -49,14 +49,25 @@ git submodule update --init --recursive
 推荐先复制环境变量模板：
 
 ```bash
+# Linux / macOS
 cp .env.example .env
+# Windows PowerShell
+Copy-Item .env.example .env
 ```
 
-安装依赖并启动后端：
+激活 conda 环境后安装依赖并启动后端：
 
 ```bash
-python3 -m pip install -r requirements.txt
-python3 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# Linux / macOS（激活后 python 指向正确解释器）
+conda activate aiad
+python -m pip install -r requirements.txt
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+```powershell
+# Windows PowerShell（使用完整解释器路径，无需激活）
+E:\AIAD\.conda\aiad\python.exe -m pip install -r requirements.txt
+E:\AIAD\.conda\aiad\python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 接口文档：
@@ -100,9 +111,10 @@ Windows PowerShell:
 
 验证 Agent 4 状态：
 
-```bash
-python -m app.services.memory.cli status
-python -m app.services.memory.cli probe tests/memory/fixtures/mock_global_state_beach.json
+```powershell
+# Windows PowerShell
+E:\AIAD\.conda\aiad\python.exe -m app.services.memory.cli status
+E:\AIAD\.conda\aiad\python.exe -m app.services.memory.cli probe tests/memory/fixtures/mock_global_state_beach.json
 ```
 
 ## MediaCrawler 调试
@@ -115,8 +127,9 @@ export PLAYWRIGHT_BROWSERS_PATH=.ms-playwright
 
 二维码登录示例：
 
-```bash
-python3 main.py --platform xhs --lt qrcode --type search --keywords 美食 --headless false --save_data_option jsonl --save_data_path data/raw/xhs_real
+```powershell
+# Windows PowerShell（MediaCrawler 专属解释器）
+E:\AIAD\.conda\mediacrawler\python.exe main.py --platform xhs --lt qrcode --type search --keywords 美食 --headless false --save_data_option jsonl --save_data_path data/raw/xhs_real
 ```
 
 ## 联调文档
@@ -134,6 +147,42 @@ python3 main.py --platform xhs --lt qrcode --type search --keywords 美食 --hea
 - LLM：`LLM_PROVIDER`、`LLM_BASE_URL`、`LLM_MODEL`、`LLM_API_KEY`
 - Vision：`VISION_PROVIDER`、`VISION_MODEL`、`VISION_API_BASE`、`VISION_API_KEY`
 - Agent 4：`AGENT4_PERSIST_DIR`、`AGENT4_SEED_DIR`、`AGENT4_EMBEDDING_MODEL`
+
+## ModelScope OpenAI 兼容范式（Agent 2/3/5）
+
+当前项目的 AI Agent 默认采用 OpenAI 兼容调用方式：
+
+- `base_url`: `https://api-inference.modelscope.cn/v1`
+- `model`: `Qwen/Qwen3.5-397B-A17B`
+- `api_key`: 从环境变量读取（不写死在代码里）
+
+示例（请勿在代码中明文写 Token）：
+
+```python
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://api-inference.modelscope.cn/v1",
+    api_key=os.getenv("MODELSCOPE_API_KEY", ""),
+)
+```
+
+注意：
+
+- `base_url` 不要带反引号、前后空格或引号嵌套。
+- 根地址直接访问可能返回 404，正常请求应走 `/chat/completions` 等 API 路径。
+
+### API Key 替换步骤
+
+1. 复制配置模板：`cp .env.example .env`（Windows 可手动复制）。
+2. 打开 `.env`，把以下占位符替换为你的 ModelScope Token：
+   - `LLM_API_KEY=YOUR_MODELSCOPE_API_KEY`
+   - `VISION_API_KEY=YOUR_MODELSCOPE_API_KEY`
+3. 不要提交 `.env` 到仓库，确保 Token 仅保存在本地。
+4. 重启后端服务使新环境变量生效。
+
+如果你曾在聊天、提交记录或日志中暴露过旧 Token，建议立即在 ModelScope 控制台吊销并重新生成。
 
 ## 常用接口
 
@@ -154,7 +203,14 @@ python3 main.py --platform xhs --lt qrcode --type search --keywords 美食 --hea
 
 ## 本地校验
 
+```powershell
+# Windows PowerShell
+E:\AIAD\.conda\aiad\python.exe -m pytest tests -q
+E:\AIAD\.conda\aiad\python.exe -m mypy app tests
+```
+
 ```bash
+# Linux / macOS（conda activate aiad 后）
 python -m pytest tests -q
 python -m mypy app tests
 ```

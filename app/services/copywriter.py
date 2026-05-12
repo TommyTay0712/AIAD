@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from typing import Any, Protocol
 
 STYLE_GUIDES = [
@@ -192,6 +194,87 @@ def call_llm_with_reserved_interface(
             result.get("prompt_version", prompt_bundle.get("prompt_version", ""))
         ),
     }
+
+
+def build_per_comment_prompt(
+    comments: list[dict[str, Any]],
+    product_info: str,
+    pain_points: list[str],
+    target_style: str,
+) -> dict[str, Any]:
+    """构造批量逐评论植入文案的 system/user prompt，一次 LLM 调用覆盖所有评论。"""
+    entries = []
+    for i, c in enumerate(comments[:8]):
+        cid = str(c.get("comment_id") or f"{c.get('note_id', '')}-{i}").strip() or f"c{i}"
+        text = str(c.get("comment_text", "")).strip()[:120]
+        if text:
+            entries.append({"id": cid, "text": text})
+
+    comments_json = json.dumps(entries, ensure_ascii=False, indent=2)
+    pain_str = "、".join(pain_points[:3]) if pain_points else "真实体验"
+
+    system_prompt = """你是小红书评论区软植入专家。
+针对每条用户评论，生成一条以普通用户口吻发出的植入回复（不是对话回复，是你主动发的评论）。
+
+硬性要求：
+1. 先呼应该评论的痛点或场景，再自然带出产品方向，过渡要丝滑
+2. 语气像真实用户而非客服，禁止出现"官方""客服""品牌"等词
+3. 每条 30-60 字，不堆砌形容词
+4. 不使用绝对化表达（"必须""根治""100%"），用"可以先看""更适合""我用下来"等低压迫表达
+5. ad_text 中不要提品牌名，只写功能/场景/感受
+6. 输出严格 JSON 数组，格式：[{"comment_id": "...", "ad_text": "..."}, ...]
+7. 覆盖输入中的每一个 id，不得遗漏"""
+
+    user_prompt = f"""产品背景：{product_info or "待补充"}
+用户关注点：{pain_str}
+参考风格：{target_style}
+
+评论列表：
+{comments_json}
+
+请为每条评论生成一条植入回复，输出 JSON 数组。"""
+
+    return {
+        "prompt_version": "per-comment-v1",
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+    }
+
+
+def parse_per_comment_result(raw_response: str) -> dict[str, str]:
+    """从 LLM 原始 HTTP 响应中解析出 {comment_id: ad_text} 字典。"""
+    content = ""
+    try:
+        resp = json.loads(raw_response)
+        content = resp["choices"][0]["message"]["content"]
+    except Exception:
+        content = raw_response
+
+    content = content.strip()
+    # 去掉 markdown 代码块
+    content = re.sub(r"^```(?:json)?\s*", "", content)
+    content = re.sub(r"\s*```$", "", content).strip()
+
+    items: list[Any] = []
+    try:
+        items = json.loads(content)
+    except json.JSONDecodeError:
+        m = re.search(r"\[[\s\S]*\]", content)
+        if m:
+            try:
+                items = json.loads(m.group(0))
+            except json.JSONDecodeError:
+                pass
+
+    result: dict[str, str] = {}
+    if isinstance(items, list):
+        for item in items:
+            if isinstance(item, dict):
+                cid = str(item.get("comment_id", "")).strip()
+                ad = str(item.get("ad_text", "")).strip()
+                if cid and ad:
+                    result[cid] = ad
+    return result
 
 
 def run_copywriter_agent(

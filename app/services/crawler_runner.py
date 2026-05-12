@@ -5,10 +5,12 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Callable
 from uuid import uuid4
 
 from app.core.config import Settings
@@ -49,6 +51,53 @@ def _detect_login_required(stdout: str, stderr: str) -> bool:
         "timeouterror: locator.click",
     ]
     return any(item in merged for item in keywords)
+
+
+def _stream_subprocess(
+    command: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    emit_fn: Callable[[dict[str, Any]], None] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """执行子进程并实时将 stdout/stderr 逐行通过 emit_fn 推送给前端。"""
+    proc = subprocess.Popen(
+        command,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+    )
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+
+    def _reader(stream: Any, lines: list[str]) -> None:
+        for raw_line in iter(stream.readline, ""):
+            line = raw_line.rstrip("\r\n")
+            lines.append(line)
+            if emit_fn and line.strip():
+                try:
+                    emit_fn({"type": "crawler_log", "line": line})
+                except Exception:
+                    pass
+        stream.close()
+
+    t_out = threading.Thread(target=_reader, args=(proc.stdout, stdout_lines), daemon=True)
+    t_err = threading.Thread(target=_reader, args=(proc.stderr, stderr_lines), daemon=True)
+    t_out.start()
+    t_err.start()
+    proc.wait()
+    t_out.join(timeout=15)
+    t_err.join(timeout=15)
+
+    return subprocess.CompletedProcess(
+        args=command,
+        returncode=proc.returncode,
+        stdout="\n".join(stdout_lines),
+        stderr="\n".join(stderr_lines),
+    )
 
 
 def _clean_runtime_logs(raw_text: str) -> str:
@@ -177,6 +226,7 @@ def run_crawler(
     max_comments_per_note: int,
     enable_media_download: bool,
     task_id: str | None = None,
+    emit_fn: Callable[[dict[str, Any]], None] | None = None,
 ) -> CrawlerRunResult:
     """执行MediaCrawler并将输出收口到AIAD目录。"""
     task_id = task_id or uuid4().hex[:12]
@@ -235,13 +285,11 @@ def run_crawler(
             " ".join(command),
         )
         try:
-            result = subprocess.run(
+            result = _stream_subprocess(
                 command,
                 cwd=settings.media_crawler_dir,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
                 env=env,
+                emit_fn=emit_fn,
             )
         except Exception as exc:
             record.status = TaskStatus.FAILED

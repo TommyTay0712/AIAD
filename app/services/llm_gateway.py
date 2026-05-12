@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import re
 from typing import Any
 
 import httpx
 
 from app.core.config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 def _strip_code_fence(text: str) -> str:
@@ -154,6 +157,13 @@ class OpenAICompatibleGateway:
                 )
                 response.raise_for_status()
         except httpx.HTTPError as exc:
+            logger.error(
+                "LLM HTTP 请求失败 provider=%s model=%s prompt_version=%s error=%s",
+                self.provider,
+                self.model,
+                prompt_bundle.get("prompt_version", ""),
+                str(exc),
+            )
             return {
                 "status": "error",
                 "provider": self.provider,
@@ -168,8 +178,12 @@ class OpenAICompatibleGateway:
         raw_response = response.text
         try:
             payload = response.json()
+            choices = payload.get("choices")
+            if not choices or not isinstance(choices, list):
+                raise ValueError(f"无效的 choices 结构: {payload}")
+            
             content = (
-                payload.get("choices", [{}])[0]
+                choices[0]
                 .get("message", {})
                 .get("content", "")
             )
@@ -206,6 +220,8 @@ class OpenAICompatibleGateway:
 def build_llm_gateway(settings: Settings) -> OpenAICompatibleGateway | None:
     provider = settings.llm_provider.strip().lower()
     if provider in {"", "disabled", "none", "null"}:
+        return None
+    if not settings.llm_api_key.strip():
         return None
     return OpenAICompatibleGateway(
         base_url=settings.llm_base_url,

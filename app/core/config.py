@@ -9,14 +9,23 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 
+def _clean_text(value: str) -> str:
+    """清理环境变量中的多余空白与反引号。"""
+    return value.strip().strip("`").strip("'").strip('"').strip()
+
+
+def _resolve_text(env_name: str, default: str) -> str:
+    return _clean_text(os.getenv(env_name, default))
+
+
 def _resolve_path(project_root: Path, env_name: str, default: str) -> Path:
-    raw_value = os.getenv(env_name, default)
+    raw_value = _resolve_text(env_name, default)
     path = Path(raw_value).expanduser()
     return path if path.is_absolute() else project_root / path
 
 
 def _resolve_executable(project_root: Path, env_name: str, default: str) -> Path:
-    raw_value = os.getenv(env_name, default).strip()
+    raw_value = _resolve_text(env_name, default)
     if not raw_value:
         return Path(default)
     resolved = shutil.which(raw_value)
@@ -58,13 +67,19 @@ class Settings(BaseModel):
     vision_enable_mock_fallback: bool = Field(default=True)
     vision_max_media_count: int = Field(default=6)
     vision_video_frame_sample_count: int = Field(default=3)
-    llm_provider: str = Field(default="disabled")
-    llm_base_url: str = Field(default="http://127.0.0.1:11434/v1")
-    llm_model: str = Field(default="qwen2.5:3b-instruct")
-    llm_api_key: str = Field(default="local-dev")
-    llm_timeout_seconds: int = Field(default=120)
+    llm_provider: str = Field(default="modelscope")
+    llm_base_url: str = Field(default="https://api-inference.modelscope.cn/v1")
+    llm_model: str = Field(default="Qwen/Qwen3.5-397B-A17B")
+    llm_api_key: str = Field(default="")
+    llm_timeout_seconds: int = Field(default=300)
     llm_temperature: float = Field(default=0.7)
-    llm_max_tokens: int = Field(default=1200)
+    llm_max_tokens: int = Field(default=3000)
+    keyword_cache_ttl_hours: int = Field(default=24)
+    keyword_cache_similarity_threshold: float = Field(default=0.35)
+    trend_crawl_interval_hours: int = Field(default=6)
+    trend_keywords_file: Path = Field(
+        default=Path(__file__).resolve().parents[2] / "data" / "trend_keywords.json"
+    )
 
 
 def get_settings() -> Settings:
@@ -86,23 +101,33 @@ def get_settings() -> Settings:
         playwright_browsers_path=_resolve_path(
             project_root, "PLAYWRIGHT_BROWSERS_PATH", ".ms-playwright"
         ),
-        log_level=os.getenv("LOG_LEVEL", "INFO"),
-        vision_provider=os.getenv("VISION_PROVIDER", "mock"),
-        vision_model=os.getenv("VISION_MODEL", "Qwen/Qwen3.5-397B-A17B"),
-        vision_api_base=os.getenv("VISION_API_BASE", "https://api-inference.modelscope.cn/v1"),
-        vision_api_key=os.getenv("VISION_API_KEY", ""),
+        log_level=_resolve_text("LOG_LEVEL", "INFO"),
+        vision_provider=_resolve_text("VISION_PROVIDER", "modelscope"),
+        vision_model=_resolve_text("VISION_MODEL", "Qwen/Qwen3.5-397B-A17B"),
+        vision_api_base=_resolve_text(
+            "VISION_API_BASE", "https://api-inference.modelscope.cn/v1"
+        ),
+        vision_api_key=_resolve_text("VISION_API_KEY", ""),
         vision_timeout_seconds=int(os.getenv("VISION_TIMEOUT_SECONDS", "45")),
         vision_enable_mock_fallback=os.getenv("VISION_ENABLE_MOCK_FALLBACK", "true").lower()
         in {"1", "true", "yes", "y"},
         vision_max_media_count=int(os.getenv("VISION_MAX_MEDIA_COUNT", "6")),
         vision_video_frame_sample_count=int(os.getenv("VISION_VIDEO_FRAME_SAMPLE_COUNT", "3")),
-        llm_provider=os.getenv("LLM_PROVIDER", "disabled"),
-        llm_base_url=os.getenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1"),
-        llm_model=os.getenv("LLM_MODEL", "qwen2.5:3b-instruct"),
-        llm_api_key=os.getenv("LLM_API_KEY", "local-dev"),
-        llm_timeout_seconds=int(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
+        llm_provider=_resolve_text("LLM_PROVIDER", "modelscope"),
+        llm_base_url=_resolve_text("LLM_BASE_URL", "https://api-inference.modelscope.cn/v1"),
+        llm_model=_resolve_text("LLM_MODEL", "Qwen/Qwen3.5-397B-A17B"),
+        llm_api_key=_resolve_text("LLM_API_KEY", ""),
+        llm_timeout_seconds=int(os.getenv("LLM_TIMEOUT_SECONDS", "300")),
         llm_temperature=float(os.getenv("LLM_TEMPERATURE", "0.7")),
-        llm_max_tokens=int(os.getenv("LLM_MAX_TOKENS", "1200")),
+        llm_max_tokens=int(os.getenv("LLM_MAX_TOKENS", "3000")),
+        keyword_cache_ttl_hours=int(os.getenv("KEYWORD_CACHE_TTL_HOURS", "24")),
+        keyword_cache_similarity_threshold=float(
+            os.getenv("KEYWORD_CACHE_SIMILARITY_THRESHOLD", "0.35")
+        ),
+        trend_crawl_interval_hours=int(os.getenv("TREND_CRAWL_INTERVAL_HOURS", "6")),
+        trend_keywords_file=_resolve_path(
+            project_root, "TREND_KEYWORDS_FILE", "data/trend_keywords.json"
+        ),
     )
     settings.crawler_output_dir.mkdir(parents=True, exist_ok=True)
     settings.processed_output_dir.mkdir(parents=True, exist_ok=True)

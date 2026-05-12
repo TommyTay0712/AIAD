@@ -65,8 +65,30 @@ async function requestJson<T>(path: string, options: RequestInit = {}): Promise<
     }
 }
 
+export type ReviewItem = {
+    comment_id: string
+    author: string
+    platform: string
+    source_text: string
+    ad_text: string
+    predicted_affinity: number
+    focus: string
+    sentiment: string
+}
+
+export type TaskStreamEvent =
+    | { type: 'progress'; stage: string; percent: number; message: string }
+    | { type: 'crawl_done'; content_count: number; comment_count: number }
+    | { type: 'comment'; data: ReviewItem }
+    | { type: 'agent_result'; agent: 'vision' | 'context' | 'rag' | 'copywriter'; data: unknown }
+    | { type: 'done'; task_id: string }
+    | { type: 'error'; message: string }
+
 export type RunTaskPayload = {
     ad_type: string
+    post_url?: string
+    product_info?: string
+    target_style?: string
     keywords: string[]
     platform: string
     limit: number
@@ -110,6 +132,38 @@ export async function waitTaskDone(
         await new Promise((resolve) => setTimeout(resolve, sleepMs))
     }
     throw new ApiRequestError('任务轮询超时，请稍后重试。', 'timeout')
+}
+
+/**
+ * 订阅任务 SSE 流。返回清理函数（调用后关闭连接）。
+ * 收到 done / error 事件后自动关闭，无需手动清理。
+ */
+export function streamTaskEvents(
+    taskId: string,
+    onEvent: (event: TaskStreamEvent) => void,
+    onError: (error: Error) => void,
+): () => void {
+    const url = buildAgent6Url(AGENT6_ENDPOINTS.taskStream(taskId))
+    const es = new EventSource(url)
+
+    es.onmessage = (e: MessageEvent) => {
+        try {
+            const event = JSON.parse(e.data as string) as TaskStreamEvent
+            onEvent(event)
+            if (event.type === 'done' || event.type === 'error') {
+                es.close()
+            }
+        } catch {
+            // 忽略 JSON 解析错误
+        }
+    }
+
+    es.onerror = () => {
+        es.close()
+        onError(new Error('SSE 连接错误，请检查网络或刷新重试'))
+    }
+
+    return () => es.close()
 }
 
 export function toUserErrorMessage(error: unknown): string {

@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, Callable, Literal, TypedDict, cast
 
 from langgraph.graph import END, START, StateGraph
 
 from app.core.config import Settings, get_settings
-from app.models.schemas import VisionAnalysis
+from app.models.schemas import NLPAnalysis, RawComment, VisionAnalysis
 from app.services.agent3_context_nlp import ContextNLPAgent
-from app.services.copywriter import LLMGateway, run_copywriter_agent
+from app.services.copywriter import (
+    LLMGateway,
+    run_copywriter_agent,
+)
+from app.services.context_agent import ContextAgent
+from app.services.rag_agent import RagAgent
 from app.services.state_builder import build_global_state
 from app.services.vision import VisionAgent
 
@@ -20,9 +25,12 @@ class DataState(TypedDict):
     raw_data: dict[str, Any]
     normalized: dict[str, Any]
     vision_analysis: dict[str, Any]
+    nlp_analysis: dict[str, Any]
+    rag_references: list[str]
     global_state: dict[str, Any]
     output: dict[str, Any]
     llm_gateway: LLMGateway | None
+    emit_fn: Callable[..., None] | None  # SSE 事件发布回调，None 表示不推送
 
 
 def _prepare_state(state: DataState) -> DataState:
@@ -32,9 +40,12 @@ def _prepare_state(state: DataState) -> DataState:
         "raw_data": normalized.get("raw_data", {}),
         "normalized": normalized,
         "vision_analysis": state.get("vision_analysis", {}),
+        "nlp_analysis": state.get("nlp_analysis", {}),
+        "rag_references": state.get("rag_references", []),
         "global_state": state.get("global_state", {}),
         "output": state.get("output", {}),
         "llm_gateway": state.get("llm_gateway"),
+        "emit_fn": state.get("emit_fn"),
     }
 
 
@@ -44,26 +55,108 @@ def _vision_node_factory(settings: Settings):
     def _vision_node(state: DataState) -> DataState:
         media_paths = state.get("raw_data", {}).get("media_paths", [])
         analysis = agent.analyze(media_paths if isinstance(media_paths, list) else [])
+        emit = state.get("emit_fn")
+        if callable(emit):
+            emit({"type": "progress", "stage": "vision_done", "percent": 55, "message": "视觉分析完成"})
+            emit({"type": "agent_result", "agent": "vision", "data": analysis.model_dump()})
         return {
             "request_info": state["request_info"],
             "raw_data": state["raw_data"],
             "normalized": state["normalized"],
             "vision_analysis": analysis.model_dump(),
+            "nlp_analysis": state.get("nlp_analysis", {}),
+            "rag_references": state.get("rag_references", []),
             "global_state": state.get("global_state", {}),
             "output": state["output"],
             "llm_gateway": state["llm_gateway"],
+            "emit_fn": state.get("emit_fn"),
         }
 
     return _vision_node
 
 
+def _context_node(state: DataState) -> DataState:
+    agent = ContextAgent()
+    raw_comments = state.get("raw_data", {}).get("comments", [])
+    parsed_comments: list[RawComment] = []
+    for row in raw_comments if isinstance(raw_comments, list) else []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            parsed_comments.append(RawComment.model_validate(row))
+        except Exception:
+            parsed_comments.append(
+                RawComment(
+                    user=str(row.get("user", "")),
+                    content=str(row.get("content", "")),
+                    likes=int(row.get("likes", 0) or 0),
+                )
+            )
+    try:
+        nlp = agent.analyze(
+            parsed_comments,
+            product_info=str(state.get("request_info", {}).get("product_info", "")),
+        )
+        nlp_payload = nlp.model_dump()
+    except Exception as exc:
+        logger.error("ContextAgent 执行失败 error=%s", str(exc))
+        nlp_payload = NLPAnalysis().model_dump()
+    emit = state.get("emit_fn")
+    if callable(emit):
+        emit({"type": "progress", "stage": "context_done", "percent": 70, "message": "评论语境分析完成"})
+        emit({"type": "agent_result", "agent": "context", "data": nlp_payload})
+    return {
+        "request_info": state["request_info"],
+        "raw_data": state["raw_data"],
+        "normalized": state["normalized"],
+        "vision_analysis": state.get("vision_analysis", {}),
+        "nlp_analysis": nlp_payload,
+        "rag_references": state.get("rag_references", []),
+        "global_state": state.get("global_state", {}),
+        "output": state["output"],
+        "llm_gateway": state["llm_gateway"],
+        "emit_fn": state.get("emit_fn"),
+    }
+
+
+def _rag_node(state: DataState) -> DataState:
+    agent = RagAgent()
+    try:
+        vision = VisionAnalysis.model_validate(state.get("vision_analysis", {}))
+        nlp = NLPAnalysis.model_validate(state.get("nlp_analysis", {}))
+        references = agent.retrieve(vision, nlp, top_k=5)
+    except Exception as exc:
+        logger.error("RagAgent 执行失败 error=%s", str(exc))
+        references = []
+    emit = state.get("emit_fn")
+    if callable(emit):
+        emit({"type": "progress", "stage": "rag_done", "percent": 80, "message": "知识库检索完成"})
+        emit({"type": "agent_result", "agent": "rag", "data": {"references": references}})
+    return {
+        "request_info": state["request_info"],
+        "raw_data": state["raw_data"],
+        "normalized": state["normalized"],
+        "vision_analysis": state.get("vision_analysis", {}),
+        "nlp_analysis": state.get("nlp_analysis", {}),
+        "rag_references": references,
+        "global_state": state.get("global_state", {}),
+        "output": state["output"],
+        "llm_gateway": state["llm_gateway"],
+        "emit_fn": state.get("emit_fn"),
+    }
+
+
 def _package_output(state: DataState) -> DataState:
     vision_analysis = VisionAnalysis.model_validate(state.get("vision_analysis", {})).model_dump()
+    nlp_analysis = NLPAnalysis.model_validate(state.get("nlp_analysis", {})).model_dump()
     global_state = build_global_state(
         normalized=state["normalized"],
         request_info=state["request_info"],
     )
+    # 优先使用 Agent2/3/4 的实时结果，兜底时仍保留 state_builder 产出的启发式字段。
     global_state["vision_analysis"] = vision_analysis
+    global_state["nlp_analysis"] = nlp_analysis
+    global_state["rag_references"] = list(state.get("rag_references", []))
 
     output = {
         "request_info": global_state["request_info"],
@@ -72,6 +165,8 @@ def _package_output(state: DataState) -> DataState:
         "comment_table": state["normalized"]["comment_table"],
         "feature_table": state["normalized"]["feature_table"],
         "vision_analysis": vision_analysis,
+        "nlp_analysis": nlp_analysis,
+        "rag_references": global_state["rag_references"],
         "global_state": global_state,
         "final_ads": global_state["final_ads"],
         "review_score": global_state["review_score"],
@@ -81,9 +176,12 @@ def _package_output(state: DataState) -> DataState:
         "raw_data": state["raw_data"],
         "normalized": state["normalized"],
         "vision_analysis": vision_analysis,
+        "nlp_analysis": nlp_analysis,
+        "rag_references": global_state["rag_references"],
         "global_state": global_state,
         "output": output,
         "llm_gateway": state["llm_gateway"],
+        "emit_fn": state.get("emit_fn"),
     }
 
 
@@ -99,15 +197,27 @@ def _generate_copy_prompt(state: DataState) -> DataState:
     output["final_ads"] = global_state.get("final_ads", [])
     output["review_score"] = global_state.get("review_score", 0)
     output["vision_analysis"] = global_state.get("vision_analysis", output.get("vision_analysis", {}))
+    emit = state.get("emit_fn")
+    if callable(emit):
+        emit({"type": "progress", "stage": "copywriter_done", "percent": 95, "message": "广告文案生成完成"})
+        emit({"type": "agent_result", "agent": "copywriter", "data": output.get("final_ads", [])})
     return {
         "request_info": state["request_info"],
         "raw_data": state["raw_data"],
         "normalized": state["normalized"],
         "vision_analysis": state["vision_analysis"],
+        "nlp_analysis": state["nlp_analysis"],
+        "rag_references": state["rag_references"],
         "global_state": global_state,
         "output": output,
         "llm_gateway": state["llm_gateway"],
+        "emit_fn": state.get("emit_fn"),
     }
+
+
+def _per_comment_copy_node(state: DataState) -> DataState:
+    """已迁移到后台线程（routes._run_per_comment_background），此占位节点仅透传 state。"""
+    return state
 
 
 def run_data_workflow(
@@ -115,28 +225,38 @@ def run_data_workflow(
     request_info: dict[str, Any] | None = None,
     settings: Settings | None = None,
     llm_gateway: LLMGateway | None = None,
+    emit_fn: Callable[..., None] | None = None,
 ) -> dict[str, Any]:
-    """执行基于 LangGraph 的数据整理流程。"""
+    """执行基于 LangGraph 的数据整理流程。emit_fn 非 None 时各节点完成后推送 SSE 事件。"""
     runtime_settings = settings or get_settings()
     graph = StateGraph(DataState)
     graph.add_node("prepare_state", _prepare_state)
     graph.add_node("vision_analysis", _vision_node_factory(runtime_settings))
+    graph.add_node("context_analysis", _context_node)
+    graph.add_node("rag_retrieve", _rag_node)
     graph.add_node("package_output", _package_output)
     graph.add_node("generate_copy_prompt", _generate_copy_prompt)
+    graph.add_node("per_comment_copy", _per_comment_copy_node)
     graph.add_edge(START, "prepare_state")
     graph.add_edge("prepare_state", "vision_analysis")
-    graph.add_edge("vision_analysis", "package_output")
+    graph.add_edge("vision_analysis", "context_analysis")
+    graph.add_edge("context_analysis", "rag_retrieve")
+    graph.add_edge("rag_retrieve", "package_output")
     graph.add_edge("package_output", "generate_copy_prompt")
-    graph.add_edge("generate_copy_prompt", END)
+    graph.add_edge("generate_copy_prompt", "per_comment_copy")
+    graph.add_edge("per_comment_copy", END)
     chain = graph.compile()
     initial_state: DataState = {
         "request_info": request_info or normalized.get("request_info", {}),
         "raw_data": normalized.get("raw_data", {}),
         "normalized": normalized,
         "vision_analysis": {},
+        "nlp_analysis": {},
+        "rag_references": [],
         "global_state": {},
         "output": {},
         "llm_gateway": llm_gateway,
+        "emit_fn": emit_fn,
     }
     chain_runtime = cast(Any, chain)
     result = cast(DataState, chain_runtime.invoke(initial_state))

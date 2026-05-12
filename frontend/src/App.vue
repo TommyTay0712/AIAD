@@ -69,6 +69,10 @@
                 <h4 class="font-headline text-xl font-bold text-primary mb-6">产品标识</h4>
                 <div class="space-y-6">
                   <div>
+                    <label class="block text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-2">目标帖子URL（可选）</label>
+                    <input class="w-full bg-surface-container-low border-none rounded-xl px-4 py-4 focus:ring-2 focus:ring-secondary/20" v-model.trim="postUrl" placeholder="https://www.xiaohongshu.com/explore/..." />
+                  </div>
+                  <div>
                     <label class="block text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-2">广告主题</label>
                     <input class="w-full bg-surface-container-low border-none rounded-xl px-4 py-4 focus:ring-2 focus:ring-secondary/20" v-model.trim="adType" placeholder="例如：高端护肤精华" />
                   </div>
@@ -167,6 +171,26 @@
               <button class="px-5 py-2.5 signature-gradient text-white rounded-xl text-sm font-semibold" @click="notifySoon(`已标记 ${filteredReviewQueue.length} 条为通过（演示）`)">全部通过 ({{ filteredReviewQueue.length }})</button>
             </div>
           </div>
+          <!-- 逐评论后台生成进度横幅 -->
+          <div
+            v-if="commentAdsStatus && commentAdsStatus !== 'complete'"
+            class="flex items-center gap-3 px-5 py-3 bg-secondary-container/30 border border-secondary-container rounded-xl text-sm text-secondary"
+          >
+            <span class="material-symbols-outlined text-base animate-spin" style="animation-duration:2s">progress_activity</span>
+            <span v-if="commentAdsStatus === 'processing'">
+              后台逐评论文案生成中 — 已处理 {{ commentAdsProgress.done }} / {{ commentAdsProgress.total }} 条，每 30 秒自动刷新
+            </span>
+            <span v-else-if="commentAdsStatus === 'pending'">后台逐评论任务等待启动...</span>
+            <span v-else>逐评论任务异常，文案可能不完整</span>
+          </div>
+          <div
+            v-if="commentAdsStatus === 'complete' && commentAdsProgress.total > 0"
+            class="flex items-center gap-3 px-5 py-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-700"
+          >
+            <span class="material-symbols-outlined text-base">check_circle</span>
+            逐评论文案全部生成完成，共 {{ commentAdsProgress.done }} / {{ commentAdsProgress.total }} 条
+          </div>
+
           <div class="space-y-4">
             <div v-for="item in filteredReviewQueue" :key="item.comment_id" class="bg-surface-container-lowest rounded-xl p-6 flex flex-col md:flex-row gap-6">
               <div class="flex-1 space-y-3">
@@ -223,9 +247,34 @@
               </div>
               <div class="mt-8 bg-surface-container-low rounded-xl p-5">
                 <div class="text-xs font-bold text-primary uppercase mb-3">实时处理日志</div>
-                <div class="space-y-2 text-xs text-on-surface-variant font-mono">
+                <div class="space-y-1 text-xs text-on-surface-variant font-mono max-h-40 overflow-y-auto">
                   <div v-for="line in progressLogs" :key="line">{{ line }}</div>
+                  <div v-if="progressLogs.length === 0" class="italic opacity-50">等待任务启动...</div>
                 </div>
+              </div>
+
+              <div v-if="streamingComments.length > 0" class="mt-6 bg-surface-container-low rounded-xl p-5">
+                <div class="flex items-center gap-2 mb-3">
+                  <span class="w-2 h-2 rounded-full bg-secondary animate-pulse"></span>
+                  <div class="text-xs font-bold text-secondary uppercase">实时评论流入</div>
+                </div>
+                <div class="space-y-2">
+                  <div
+                    v-for="item in streamingComments"
+                    :key="item.comment_id"
+                    class="bg-surface-container-lowest rounded-lg p-3 text-xs border-l-2 border-secondary/60"
+                  >
+                    <div class="flex items-center gap-2 mb-1">
+                      <span class="font-semibold text-on-surface">{{ item.author }}</span>
+                      <span class="px-1.5 py-0.5 rounded text-[10px] font-bold"
+                        :class="item.sentiment === 'positive' ? 'bg-green-100 text-green-700' : item.sentiment === 'negative' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-600'">
+                        {{ item.sentiment }}
+                      </span>
+                    </div>
+                    <div class="text-on-surface-variant italic leading-relaxed">{{ item.source_text }}</div>
+                  </div>
+                </div>
+                <div class="mt-2 text-xs text-on-surface-variant opacity-60">已流入 {{ reviewQueue.length }} 条评论，正在持续分析...</div>
               </div>
             </div>
           </div>
@@ -288,9 +337,9 @@ import { AGENT6_CONFIG } from './config/agent6';
 import {
   getTaskInsights,
   getTaskMeta,
+  streamTaskEvents,
   submitTask,
   toUserErrorMessage,
-  waitTaskDone,
 } from './services/adIntelApi';
 
 export default {
@@ -308,6 +357,7 @@ export default {
       ],
       activeScreen: "campaign",
       globalFilter: "",
+      postUrl: "",
       adType: "",
       keywords: "",
       valueProposition: "",
@@ -340,6 +390,10 @@ export default {
       taskMeta: {},
       toastText: "",
       toastTimerId: null,
+      streamingComments: [],  // SSE 流入的评论（最近 5 条），用于进度页实时预览
+      commentAdsStatus: "",   // pending | processing | complete | error
+      commentAdsProgress: { done: 0, total: 0 },
+      commentAdsPollTimer: null,
     };
   },
   mounted() {
@@ -351,6 +405,10 @@ export default {
     if (this.toastTimerId) {
       clearTimeout(this.toastTimerId);
       this.toastTimerId = null;
+    }
+    if (this.commentAdsPollTimer) {
+      clearInterval(this.commentAdsPollTimer);
+      this.commentAdsPollTimer = null;
     }
   },
   computed: {
@@ -483,10 +541,18 @@ export default {
     parseKeywords() {
       if (!this.keywords) return [this.adType];
       const parsed = this.keywords
-        .split(",")
+        .split(/[，,]/)
         .map((item) => item.trim())
         .filter(Boolean);
       return parsed.length > 0 ? parsed : [this.adType];
+    },
+    mapToneToTargetStyle() {
+      const mapping = {
+        专业: "测评风",
+        自然: "随口安利风",
+        锋利: "痛点回应风",
+      };
+      return mapping[this.campaignTone] || "测评风";
     },
     normalizePositiveInt(value, fallback) {
       const parsed = Number.parseInt(String(value), 10);
@@ -502,6 +568,8 @@ export default {
       try {
         const insights = await getTaskInsights(this.taskId);
         this.reviewQueue = insights.review_queue || [];
+        this.commentAdsStatus = insights.comment_ads_status || "";
+        this.commentAdsProgress = insights.comment_ads_progress || { done: 0, total: 0 };
         this.progressStep = insights.progress?.step || this.progressStep;
         this.progressMetrics = insights.progress?.metrics || this.progressMetrics;
         this.progressLogs = insights.progress?.logs || [];
@@ -512,6 +580,16 @@ export default {
       } catch (error) {
         this.errorText = toUserErrorMessage(error);
       }
+    },
+    _startCommentAdsPolling() {
+      if (this.commentAdsPollTimer) return;
+      this.commentAdsPollTimer = setInterval(async () => {
+        await this.loadInsights();
+        if (this.commentAdsStatus === "complete" || this.commentAdsStatus === "error") {
+          clearInterval(this.commentAdsPollTimer);
+          this.commentAdsPollTimer = null;
+        }
+      }, 30000);
     },
     async runTask() {
       if (!this.adType) return;
@@ -526,8 +604,9 @@ export default {
       this.commentTable = [];
       this.featureTable = [];
       this.reviewQueue = [];
+      this.streamingComments = [];
       this.progressLogs = [];
-      this.progressStep = { current: 1, total: 4, label: "初始化", percent: 8 };
+      this.progressStep = { current: 1, total: 4, label: "初始化", percent: 5 };
       this.progressMetrics = { posts_scanned: 0, comments_read: 0 };
       this.startedAtMs = Date.now();
       this.setActiveScreen("progress");
@@ -535,6 +614,9 @@ export default {
       try {
         const payload = {
           ad_type: this.adType,
+          post_url: this.postUrl,
+          product_info: this.valueProposition || this.adType,
+          target_style: this.mapToneToTargetStyle(),
           keywords: this.parseKeywords(),
           platform: "xhs",
           limit: this.normalizePositiveInt(this.postLimit, 120),
@@ -544,33 +626,81 @@ export default {
         };
         const runData = await submitTask(payload);
         this.taskId = runData.task_id || "";
-        const task = await waitTaskDone(this.taskId, (count, status) => {
-          this.pollCount = count;
-          if (status === "running") {
-            this.setTaskPhase("running");
-            this.progressStep = {
-              current: 3,
-              total: 4,
-              label: "内容合成中",
-              percent: Math.min(90, 20 + count * 3),
-            };
-          }
+        if (!this.taskId) {
+          throw new Error("后端未返回 task_id");
+        }
+
+        // 用 SSE 替代轮询，实时接收进度和评论
+        await new Promise((resolve, reject) => {
+          streamTaskEvents(
+            this.taskId,
+            (event) => {
+              const now = new Date().toLocaleTimeString();
+              if (event.type === "progress") {
+                this.pollCount += 1;
+                const stageToStep = (pct) => Math.max(1, Math.min(4, Math.ceil(pct / 25)));
+                this.progressStep = {
+                  current: stageToStep(event.percent),
+                  total: 4,
+                  label: event.message,
+                  percent: event.percent,
+                };
+                this.progressLogs = [
+                  `${now} [${event.stage.toUpperCase()}] ${event.message}`,
+                  ...this.progressLogs,
+                ].slice(0, 30);
+              } else if (event.type === "crawl_done") {
+                this.progressMetrics.posts_scanned = event.content_count;
+                this.progressMetrics.comments_read = event.comment_count;
+                this.progressLogs = [
+                  `${now} [CRAWLER] 抓取完成 内容:${event.content_count} 评论:${event.comment_count}`,
+                  ...this.progressLogs,
+                ].slice(0, 30);
+              } else if (event.type === "comment") {
+                // 评论逐条流入：追加到审核队列 + 保留最近 5 条用于进度页预览
+                this.reviewQueue.push(event.data);
+                this.streamingComments = [event.data, ...this.streamingComments].slice(0, 5);
+              } else if (event.type === "comment_ads_partial") {
+                // 每批逐评论文案到达时实时更新审核队列
+                const ads = event.comment_ads || {};
+                this.reviewQueue = this.reviewQueue.map((item) => {
+                  const ad = ads[item.comment_id];
+                  return ad !== undefined ? { ...item, ad_text: ad } : item;
+                });
+              } else if (event.type === "crawler_log") {
+                this.progressLogs = [
+                  `${now} [CRAWLER] ${event.line}`,
+                  ...this.progressLogs,
+                ].slice(0, 50);
+              } else if (event.type === "agent_result") {
+                const agentLabel = {
+                  vision: "视觉分析", context: "评论语境分析",
+                  rag: "知识库检索", copywriter: "广告文案生成",
+                };
+                this.progressLogs = [
+                  `${now} [AGENT] ${agentLabel[event.agent] || event.agent} 完成`,
+                  ...this.progressLogs,
+                ].slice(0, 30);
+              } else if (event.type === "done") {
+                resolve(null);
+              } else if (event.type === "error") {
+                reject(new Error(event.message));
+              }
+            },
+            (err) => reject(err),
+          );
         });
+
         const meta = await getTaskMeta(this.taskId);
         this.taskMeta = meta;
-        if (task.status && task.status !== "success") {
-          this.setTaskPhase("error");
-          this.errorText = task.message || "任务失败";
-          return;
-        }
         this.setTaskPhase("success");
-        this.progressStep = { current: 4, total: 4, label: "完成", percent: 100 };
-        this.summary = task.summary || {};
-        this.contentTable = task.content_table || [];
-        this.commentTable = task.comment_table || [];
-        this.featureTable = task.feature_table || [];
+        this.progressStep = { current: 4, total: 4, label: "分析完成", percent: 100 };
         await this.loadInsights();
         this.setActiveScreen("review");
+        // 后台逐评论任务尚未完成时，启动 30s 轮询直到 complete/error
+        if (this.commentAdsStatus && this.commentAdsStatus !== "complete") {
+          this._startCommentAdsPolling();
+        }
       } catch (error) {
         this.setTaskPhase("error");
         this.errorText = toUserErrorMessage(error);

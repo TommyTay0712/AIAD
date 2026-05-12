@@ -4,7 +4,10 @@ import json
 import logging
 from typing import Any
 
-from openai import OpenAI
+try:
+    from openai import OpenAI
+except ImportError:  # pragma: no cover - 运行环境可选依赖
+    OpenAI = None  # type: ignore[assignment]
 
 from app.core.config import Settings
 
@@ -16,12 +19,25 @@ class ContextNLPAgent:
 
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.client = OpenAI(
-            base_url=settings.llm_base_url,
-            api_key=settings.llm_api_key,
+        llm_provider = settings.llm_provider.strip().lower()
+        if llm_provider in {"", "disabled", "none", "null"} or not settings.llm_api_key.strip():
+            self.client = None
+            self.model = settings.llm_model
+            logger.warning("Agent3 未启用远程 LLM（provider 或 api_key 未配置），将使用默认语境输出")
+            return
+        self.client = (
+            OpenAI(
+                base_url=settings.llm_base_url,
+                api_key=settings.llm_api_key,
+            )
+            if OpenAI is not None
+            else None
         )
         self.model = settings.llm_model
-        logger.info("Agent3 初始化完成，使用模型: %s", self.model)
+        if self.client is None:
+            logger.warning("openai 依赖未安装，Agent3 将使用默认语境输出")
+        else:
+            logger.info("Agent3 初始化完成，使用模型: %s", self.model)
 
     def analyze_comments(self, comments: list[dict[str, Any]]) -> dict[str, Any]:
         """
@@ -40,6 +56,8 @@ class ContextNLPAgent:
             return self._get_default_context()
 
         sample_comments = "\n".join(comment_texts[:30])  # 限制数量防止超 token
+        if self.client is None:
+            return self._get_default_context()
 
         system_prompt = """
 你是一个小红书评论区语境分析专家。小红书评论中常出现 `[doge]`、`[失望R]`、`[大笑R]` 等占位符，代表对应 Emoji，请结合上下文理解情绪。
