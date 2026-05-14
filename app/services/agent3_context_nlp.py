@@ -5,9 +5,9 @@ import logging
 from typing import Any
 
 try:
-    from openai import OpenAI
+    import openai as openai_module
 except ImportError:  # pragma: no cover - 运行环境可选依赖
-    OpenAI = None  # type: ignore[assignment]
+    openai_module = None
 
 from app.core.config import Settings
 
@@ -19,18 +19,18 @@ class ContextNLPAgent:
 
     def __init__(self, settings: Settings):
         self.settings = settings
+        self.client: Any | None = None
         llm_provider = settings.llm_provider.strip().lower()
         if llm_provider in {"", "disabled", "none", "null"} or not settings.llm_api_key.strip():
-            self.client = None
             self.model = settings.llm_model
             logger.warning("Agent3 未启用远程 LLM（provider 或 api_key 未配置），将使用默认语境输出")
             return
         self.client = (
-            OpenAI(
+            openai_module.OpenAI(
                 base_url=settings.llm_base_url,
                 api_key=settings.llm_api_key,
             )
-            if OpenAI is not None
+            if openai_module is not None
             else None
         )
         self.model = settings.llm_model
