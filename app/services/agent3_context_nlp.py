@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import importlib
 import json
 import logging
+from types import ModuleType
 from typing import Any
 
-try:
-    import openai as openai_module
-except ImportError:  # pragma: no cover - 运行环境可选依赖
-    openai_module = None
+def _load_openai_module() -> ModuleType | None:
+    try:
+        return importlib.import_module("openai")
+    except ImportError:  # pragma: no cover - 运行环境可选依赖
+        return None
+
+
+openai_module = _load_openai_module()
 
 from app.core.config import Settings
 
