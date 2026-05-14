@@ -99,15 +99,37 @@ export async function waitTaskDone(
     onPoll?: (pollCount: number, status: string) => void,
     maxAttempts = 180,
     sleepMs = 3000,
+    confirmFailedAttempts = 10,
+    maxConsecutivePollErrors = 10,
 ) {
+    let consecutiveFailedAttempts = 0
+    let consecutivePollErrors = 0
+
     for (let i = 0; i < maxAttempts; i += 1) {
-        const task = await getTaskStatus(taskId)
-        const currentStatus = String(task.status || 'success')
-        if (onPoll) onPoll(i + 1, currentStatus)
-        if (!task.status || currentStatus === 'success' || currentStatus === 'failed') {
-            return task
+        try {
+            const task = await getTaskStatus(taskId)
+            const currentStatus = String(task.status || 'success')
+
+            consecutivePollErrors = 0
+            if (onPoll) onPoll(i + 1, currentStatus)
+            if (!task.status || currentStatus === 'success') {
+                return task
+            }
+            if (currentStatus === 'failed') {
+                consecutiveFailedAttempts += 1
+                if (consecutiveFailedAttempts >= confirmFailedAttempts) {
+                    return task
+                }
+            } else {
+                consecutiveFailedAttempts = 0
+            }
+        } catch (error) {
+            consecutivePollErrors += 1
+            if (consecutivePollErrors >= maxConsecutivePollErrors || i === maxAttempts - 1) {
+                throw error
+            }
         }
-        await new Promise((resolve) => setTimeout(resolve, sleepMs))
+        await new Promise<void>((resolve: () => void) => setTimeout(resolve, sleepMs))
     }
     throw new ApiRequestError('任务轮询超时，请稍后重试。', 'timeout')
 }
