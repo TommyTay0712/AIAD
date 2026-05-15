@@ -522,6 +522,8 @@ def _build_single_review_item(
         "predicted_affinity": affinity_map.get(sentiment, 70),
         "focus": focus_map.get(sentiment, "品牌曝光"),
         "sentiment": sentiment,
+        "likes": int(comment.get("likes", 0) or 0),
+        "note_id": note_id,
     }
 
 

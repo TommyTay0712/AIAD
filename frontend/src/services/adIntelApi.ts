@@ -74,6 +74,8 @@ export type ReviewItem = {
     predicted_affinity: number
     focus: string
     sentiment: string
+    likes?: number
+    note_id?: string
 }
 
 export type TaskStreamEvent =

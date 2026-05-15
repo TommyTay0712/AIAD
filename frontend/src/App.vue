@@ -167,8 +167,22 @@
               <p class="text-on-surface-variant mt-2">对 AI 生成文案进行审核并派发。</p>
             </div>
             <div class="flex gap-3">
+              <button class="px-5 py-2.5 bg-surface-container-highest rounded-xl text-sm font-semibold flex items-center gap-2" @click="refreshComments" :disabled="isRefreshing">
+                <span class="material-symbols-outlined text-base" :class="{ 'animate-spin': isRefreshing }">refresh</span>
+                {{ isRefreshing ? "刷新中..." : "刷新评论" }}
+              </button>
               <button class="px-5 py-2.5 bg-surface-container-highest rounded-xl text-sm font-semibold" @click="notifySoon('批量驳回功能待接入')">批量驳回</button>
               <button class="px-5 py-2.5 signature-gradient text-white rounded-xl text-sm font-semibold" @click="notifySoon(`已标记 ${filteredReviewQueue.length} 条为通过（演示）`)">全部通过 ({{ filteredReviewQueue.length }})</button>
+            </div>
+          </div>
+          <div class="rounded-xl border border-outline-variant/30 bg-surface-container-lowest px-4 py-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <div class="text-xs font-bold uppercase tracking-widest text-secondary">评论刷新状态</div>
+              <div class="text-sm text-on-surface-variant">{{ reviewSyncMessage }}</div>
+            </div>
+            <div class="flex items-center gap-3 text-xs">
+              <span class="px-2 py-1 rounded-full font-semibold" :class="reviewSyncBadgeClass">{{ reviewSyncStatusText }}</span>
+              <span class="text-on-surface-variant">最后同步：{{ lastInsightsSyncedLabel }}</span>
             </div>
           </div>
           <!-- 逐评论后台生成进度横幅 -->
@@ -192,9 +206,18 @@
           </div>
 
           <div class="space-y-4">
-            <div v-for="item in filteredReviewQueue" :key="item.comment_id" class="bg-surface-container-lowest rounded-xl p-6 flex flex-col md:flex-row gap-6">
+            <div v-for="item in displayReviewQueue" :key="item.comment_id" class="bg-surface-container-lowest rounded-xl p-6 flex flex-col md:flex-row gap-6">
               <div class="flex-1 space-y-3">
-                <div class="text-xs text-on-surface-variant">{{ item.author }} · {{ item.platform }}</div>
+                <div class="flex items-center gap-2 text-xs text-on-surface-variant">
+                  <span>{{ item.author }}</span>
+                  <span>·</span>
+                  <span>{{ item.platform }}</span>
+                  <span v-if="item.likes !== undefined" class="flex items-center gap-1 text-pink-500">
+                    <span>·</span>
+                    <span class="material-symbols-outlined text-sm">favorite</span>
+                    <span>{{ item.likes }}</span>
+                  </span>
+                </div>
                 <div class="bg-surface-container-low p-4 rounded-xl text-sm italic">{{ item.source_text }}</div>
               </div>
               <div class="flex-[1.5] space-y-3">
@@ -394,6 +417,10 @@ export default {
       commentAdsStatus: "",   // pending | processing | complete | error
       commentAdsProgress: { done: 0, total: 0 },
       commentAdsPollTimer: null,
+      isRefreshing: false,
+      lastInsightsSyncedAt: 0,
+      reviewSyncStatus: "idle", // idle | refreshing | success | error
+      reviewSyncMessage: "点击“刷新评论”可重新拉取后端最新评论。",
     };
   },
   mounted() {
@@ -469,6 +496,45 @@ export default {
         return haystack.includes(query);
       });
     },
+    displayReviewQueue() {
+      const items = this.filteredReviewQueue.map((item, index) => ({ item, index }));
+      const hasLikeSignal = items.some(({ item }) => Number(item.likes || 0) > 0);
+      if (!hasLikeSignal) {
+        return items.map(({ item }) => item);
+      }
+      return items
+        .sort((left, right) => {
+          const leftLikes = Number(left.item.likes || 0);
+          const rightLikes = Number(right.item.likes || 0);
+          if (rightLikes !== leftLikes) return rightLikes - leftLikes;
+          return left.index - right.index;
+        })
+        .map(({ item }) => item);
+    },
+    reviewSyncStatusText() {
+      const mapping = {
+        idle: "待同步",
+        refreshing: "同步中",
+        success: "已同步",
+        error: "同步失败",
+      };
+      return mapping[this.reviewSyncStatus] || mapping.idle;
+    },
+    reviewSyncBadgeClass() {
+      const mapping = {
+        idle: "bg-surface-container-highest text-on-surface-variant",
+        refreshing: "bg-secondary-container/40 text-secondary",
+        success: "bg-green-100 text-green-700",
+        error: "bg-red-100 text-red-700",
+      };
+      return mapping[this.reviewSyncStatus] || mapping.idle;
+    },
+    lastInsightsSyncedLabel() {
+      if (!this.lastInsightsSyncedAt) return "尚未同步";
+      return new Date(this.lastInsightsSyncedAt).toLocaleString("zh-CN", {
+        hour12: false,
+      });
+    },
   },
   methods: {
     screenPathMap() {
@@ -509,6 +575,9 @@ export default {
       this.taskId = "";
       this.pollCount = 0;
       this.elapsedSeconds = 0;
+      this.lastInsightsSyncedAt = 0;
+      this.reviewSyncStatus = "idle";
+      this.reviewSyncMessage = "点击“刷新评论”可重新拉取后端最新评论。";
       this.notifySoon("已切换到新建任务");
     },
     notifySoon(message) {
@@ -563,11 +632,17 @@ export default {
       if (!this.startedAtMs) return;
       this.elapsedSeconds = Math.max(0, Math.round((Date.now() - this.startedAtMs) / 1000));
     },
-    async loadInsights() {
+    async loadInsights({ updateReviewState = true } = {}) {
       if (!this.taskId) return;
       try {
         const insights = await getTaskInsights(this.taskId);
-        this.reviewQueue = insights.review_queue || [];
+        this.reviewQueue = Array.isArray(insights.review_queue)
+          ? insights.review_queue.map((item) => ({
+            ...item,
+            likes: Number(item.likes || 0),
+            note_id: String(item.note_id || ""),
+          }))
+          : [];
         this.commentAdsStatus = insights.comment_ads_status || "";
         this.commentAdsProgress = insights.comment_ads_progress || { done: 0, total: 0 };
         this.progressStep = insights.progress?.step || this.progressStep;
@@ -577,14 +652,42 @@ export default {
         this.sentimentBars = insights.analytics?.sentiment_bars || [];
         this.analyticsTopics = insights.analytics?.topic_cloud || [];
         this.analyticsInsight = insights.analytics?.insight || this.analyticsInsight;
+        this.lastInsightsSyncedAt = Date.now();
+        if (updateReviewState) {
+          this.reviewSyncStatus = "success";
+          this.reviewSyncMessage = `已同步最新评论，共 ${this.reviewQueue.length} 条。`;
+        }
+        return true;
       } catch (error) {
-        this.errorText = toUserErrorMessage(error);
+        if (updateReviewState) {
+          this.reviewSyncStatus = "error";
+          this.reviewSyncMessage = "评论同步失败，请点击刷新重试。";
+        }
+        return false;
+      }
+    },
+    async refreshComments() {
+      if (!this.taskId || this.isRefreshing) return;
+      this.isRefreshing = true;
+      this.reviewSyncStatus = "refreshing";
+      this.reviewSyncMessage = "正在向后端同步最新评论...";
+      try {
+        const refreshed = await this.loadInsights();
+        if (refreshed) {
+          this.notifySoon(`已刷新评论列表，共 ${this.reviewQueue.length} 条`);
+        } else {
+          this.notifySoon("刷新失败，请重试");
+        }
+      } catch (error) {
+        this.notifySoon("刷新失败，请重试");
+      } finally {
+        this.isRefreshing = false;
       }
     },
     _startCommentAdsPolling() {
       if (this.commentAdsPollTimer) return;
       this.commentAdsPollTimer = setInterval(async () => {
-        await this.loadInsights();
+        await this.loadInsights({ updateReviewState: false });
         if (this.commentAdsStatus === "complete" || this.commentAdsStatus === "error") {
           clearInterval(this.commentAdsPollTimer);
           this.commentAdsPollTimer = null;
