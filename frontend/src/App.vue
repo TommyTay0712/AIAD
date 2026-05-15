@@ -212,7 +212,7 @@
                   <span class="text-xs text-secondary font-bold">{{ item.predicted_affinity }}% 匹配度</span>
                 </div>
                 <div class="bg-primary/5 p-4 rounded-xl text-sm">{{ item.ad_text }}</div>
-                <div class="text-xs text-on-surface-variant">投放方向：{{ item.focus }} · 评论赞 {{ item.comment_like_count || 0 }} · 帖子赞 {{ item.post_like_count || 0 }} · {{ item.selection_reason || "优先评论" }}</div>
+                <div class="text-xs text-on-surface-variant">投放方向：{{ item.focus }} · 评论赞 {{ item.likes ?? item.comment_like_count ?? 0 }} · 帖子赞 {{ item.post_like_count || 0 }} · {{ item.selection_reason || "优先评论" }}</div>
               </div>
               <div class="flex items-center">
                 <button class="w-12 h-12 rounded-full signature-gradient text-white flex items-center justify-center" @click="dispatchAd(item)">

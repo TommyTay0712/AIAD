@@ -67,6 +67,7 @@ async function requestJson<T>(path: string, options: RequestInit = {}): Promise<
 
 export type ReviewItem = {
     comment_id: string
+    note_id: string
     author: string
     platform: string
     source_text: string
@@ -74,6 +75,7 @@ export type ReviewItem = {
     predicted_affinity: number
     focus: string
     sentiment: string
+    likes: number
     comment_like_count?: number
     post_like_count?: number
     selection_rank?: number

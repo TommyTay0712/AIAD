@@ -49,9 +49,11 @@ def test_build_review_queue_uses_author_and_default_comment_id() -> None:
 
     assert len(queue) == 2
     assert queue[0]["comment_id"] == "n1-0"
+    assert queue[0]["note_id"] == "n1"
     assert queue[0]["author"] == "博主A"
     assert queue[0]["sentiment"] == "positive"
     assert queue[0]["focus"] == "种草转化"
+    assert queue[0]["likes"] == 0
     assert queue[1]["comment_id"] == "c2"
     assert queue[1]["sentiment"] == "negative"
     assert queue[1]["focus"] == "痛点回应"
@@ -82,6 +84,8 @@ def test_build_review_queue_prefers_priority_comment_table() -> None:
     queue = _build_review_queue(payload)
 
     assert [item["comment_id"] for item in queue] == ["priority-first"]
+    assert queue[0]["note_id"] == "n1"
+    assert queue[0]["likes"] == 88
     assert queue[0]["comment_like_count"] == 88
     assert queue[0]["post_like_count"] == 1000
     assert queue[0]["selection_reason"] == "高赞帖子 + 高赞评论"

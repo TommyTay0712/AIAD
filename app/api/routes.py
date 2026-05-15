@@ -547,6 +547,7 @@ def _build_single_review_item(
 
     return {
         "comment_id": comment.get("comment_id") or f"{note_id}-{index}",
+        "note_id": str(note_id),
         "author": source_meta.get("author_name", "匿名用户"),
         "platform": "小红书",
         "source_text": text[:220],
@@ -554,6 +555,7 @@ def _build_single_review_item(
         "predicted_affinity": affinity_map.get(sentiment, 70),
         "focus": focus_map.get(sentiment, "品牌曝光"),
         "sentiment": sentiment,
+        "likes": comment_like_count,
         "comment_like_count": comment_like_count,
         "post_like_count": int(
             comment.get("post_like_count", source_meta.get("like_count", 0)) or 0
