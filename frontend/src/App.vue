@@ -17,7 +17,6 @@
             <span class="material-symbols-outlined text-sm">add</span>
             新建任务
           </button>
-          <div class="px-2 pt-2 text-xs text-on-surface-variant">Stitch Project: {{ stitchProjectId }}</div>
         </div>
       </aside>
 
@@ -52,7 +51,7 @@
           <div class="flex justify-between items-end">
             <div>
               <h3 class="text-4xl font-headline font-extrabold text-primary tracking-tight">Campaign Configuration</h3>
-              <p class="text-on-surface-variant mt-2">按 Stitch 的 Campaign Setup 结构配置抓取与投放策略。</p>
+              <p class="text-on-surface-variant mt-2">配置抓取参数与投放策略，启动 AI 分析流程。</p>
             </div>
             <div class="flex gap-3">
               <button class="px-6 py-2.5 rounded-xl bg-surface-container-highest text-on-surface font-semibold" @click="saveDraft">保存草稿</button>
@@ -307,7 +306,7 @@
           <div>
             <span class="text-secondary font-bold text-xs uppercase tracking-widest bg-secondary-container/20 px-3 py-1 rounded-full">报告：实时分析</span>
             <h3 class="text-4xl font-headline font-extrabold text-primary mt-4">分析看板</h3>
-            <p class="text-on-surface-variant mt-2">按 Stitch 风格重做的数据驾驶舱。</p>
+            <p class="text-on-surface-variant mt-2">查看任务分析结果与关键指标。</p>
           </div>
 
           <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
@@ -368,7 +367,6 @@ import {
 export default {
   data() {
     return {
-      stitchProjectId: "15597441123141010762",
       modelName: AGENT6_CONFIG.modelName,
       baseUrl: AGENT6_CONFIG.baseUrl,
       apiPrefix: AGENT6_CONFIG.apiPrefix,
