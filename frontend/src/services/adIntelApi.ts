@@ -67,7 +67,6 @@ async function requestJson<T>(path: string, options: RequestInit = {}): Promise<
 
 export type ReviewItem = {
     comment_id: string
-    note_id: string
     author: string
     platform: string
     source_text: string
@@ -75,19 +74,14 @@ export type ReviewItem = {
     predicted_affinity: number
     focus: string
     sentiment: string
-    likes: number
-    comment_like_count?: number
-    post_like_count?: number
-    selection_rank?: number
-    selection_reason?: string
+    likes?: number
+    note_id?: string
 }
 
 export type TaskStreamEvent =
     | { type: 'progress'; stage: string; percent: number; message: string }
     | { type: 'crawl_done'; content_count: number; comment_count: number }
     | { type: 'comment'; data: ReviewItem }
-    | { type: 'comment_ads_partial'; comment_ads: Record<string, string> }
-    | { type: 'crawler_log'; line: string }
     | { type: 'agent_result'; agent: 'vision' | 'context' | 'rag' | 'copywriter'; data: unknown }
     | { type: 'done'; task_id: string }
     | { type: 'error'; message: string }
@@ -129,15 +123,37 @@ export async function waitTaskDone(
     onPoll?: (pollCount: number, status: string) => void,
     maxAttempts = 180,
     sleepMs = 3000,
+    confirmFailedAttempts = 10,
+    maxConsecutivePollErrors = 10,
 ) {
+    let consecutiveFailedAttempts = 0
+    let consecutivePollErrors = 0
+
     for (let i = 0; i < maxAttempts; i += 1) {
-        const task = await getTaskStatus(taskId)
-        const currentStatus = String(task.status || 'success')
-        if (onPoll) onPoll(i + 1, currentStatus)
-        if (!task.status || currentStatus === 'success' || currentStatus === 'failed') {
-            return task
+        try {
+            const task = await getTaskStatus(taskId)
+            const currentStatus = String(task.status || 'success')
+
+            consecutivePollErrors = 0
+            if (onPoll) onPoll(i + 1, currentStatus)
+            if (!task.status || currentStatus === 'success') {
+                return task
+            }
+            if (currentStatus === 'failed') {
+                consecutiveFailedAttempts += 1
+                if (consecutiveFailedAttempts >= confirmFailedAttempts) {
+                    return task
+                }
+            } else {
+                consecutiveFailedAttempts = 0
+            }
+        } catch (error) {
+            consecutivePollErrors += 1
+            if (consecutivePollErrors >= maxConsecutivePollErrors || i === maxAttempts - 1) {
+                throw error
+            }
         }
-        await new Promise((resolve) => setTimeout(resolve, sleepMs))
+        await new Promise<void>((resolve: () => void) => setTimeout(resolve, sleepMs))
     }
     throw new ApiRequestError('任务轮询超时，请稍后重试。', 'timeout')
 }
