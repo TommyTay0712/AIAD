@@ -163,7 +163,7 @@
             <div>
               <p class="text-secondary font-bold text-xs uppercase tracking-widest">待审批</p>
               <h3 class="font-headline text-3xl font-extrabold text-primary">审核队列</h3>
-              <p class="text-on-surface-variant mt-2">对 AI 生成文案进行审核并派发。</p>
+              <p class="text-on-surface-variant mt-2">对 AI 生成文案进行审核并复制使用。</p>
             </div>
             <div class="flex gap-3">
               <button class="px-5 py-2.5 bg-surface-container-highest rounded-xl text-sm font-semibold flex items-center gap-2" @click="refreshComments" :disabled="isRefreshing">
@@ -228,8 +228,8 @@
                 <div class="text-xs text-on-surface-variant">投放方向：{{ item.focus }}</div>
               </div>
               <div class="flex items-center">
-                <button class="w-12 h-12 rounded-full signature-gradient text-white flex items-center justify-center" @click="dispatchAd(item)">
-                  <span class="material-symbols-outlined active-fill">send</span>
+                <button class="w-12 h-12 rounded-full signature-gradient text-white flex items-center justify-center" @click="copyAdText(item)" title="复制广告文案">
+                  <span class="material-symbols-outlined active-fill">content_copy</span>
                 </button>
               </div>
             </div>
@@ -476,7 +476,7 @@ export default {
     activeScreenTitle() {
       const mapping = {
         campaign: "任务配置",
-        review: "审核与派发",
+        review: "审核与复制",
         progress: "分析进度",
         analytics: "数据看板",
       };
@@ -591,9 +591,18 @@ export default {
     saveDraft() {
       this.notifySoon("草稿已保存（本地演示）");
     },
-    dispatchAd(item) {
-      const author = item?.author || "目标用户";
-      this.notifySoon(`已派发给 ${author}（演示）`);
+    async copyAdText(item) {
+      if (!item || !item.ad_text) {
+        this.notifySoon('没有可复制的广告文案');
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(item.ad_text);
+        this.notifySoon('广告文案已复制到剪贴板');
+      } catch (err) {
+        console.error('复制失败:', err);
+        this.notifySoon('复制失败，请手动复制');
+      }
     },
     setTaskPhase(phase) {
       const statusTextMap = {
