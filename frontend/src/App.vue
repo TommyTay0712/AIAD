@@ -305,47 +305,86 @@
 
 
         <section class="p-12 max-w-7xl mx-auto space-y-8" v-if="activeScreen === 'analytics'">
-          <div>
-            <span class="text-secondary font-bold text-xs uppercase tracking-widest bg-secondary-container/20 px-3 py-1 rounded-full">报告：实时分析</span>
-            <h3 class="text-4xl font-headline font-extrabold text-primary mt-4">分析看板</h3>
-            <p class="text-on-surface-variant mt-2">查看任务分析结果与关键指标。</p>
+          <!-- 标题行 -->
+          <div class="flex items-end justify-between">
+            <div>
+              <span class="text-secondary font-bold text-xs uppercase tracking-widest bg-secondary-container/20 px-3 py-1 rounded-full">报告：实时分析</span>
+              <h3 class="text-4xl font-headline font-extrabold text-primary mt-4">分析看板</h3>
+              <p class="text-on-surface-variant mt-2">查看任务分析结果与关键指标。</p>
+            </div>
+            <span v-if="showMockData" class="px-3 py-1.5 bg-amber-100 text-amber-700 text-xs font-bold rounded-full border border-amber-200 select-none">演示数据</span>
           </div>
 
-          <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
-            <div class="bg-surface-container-lowest p-6 rounded-xl">
-              <p class="text-on-surface-variant text-xs uppercase mb-2">总评论数</p>
-              <h4 class="text-3xl font-headline font-extrabold text-primary">{{ analyticsKpis.comment_count }}</h4>
+          <!-- KPI 卡片 -->
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
+            <div class="bg-surface-container-lowest p-6 rounded-xl border-l-4 border-blue-400">
+              <div class="flex items-center gap-2 mb-3">
+                <span class="material-symbols-outlined text-blue-400 text-xl">chat_bubble</span>
+                <p class="text-on-surface-variant text-xs font-bold uppercase tracking-wide">总评论数</p>
+              </div>
+              <h4 class="text-3xl font-headline font-extrabold text-primary">{{ displayKpis.comment_count.toLocaleString() }}</h4>
             </div>
-            <div class="bg-surface-container-lowest p-6 rounded-xl">
-              <p class="text-on-surface-variant text-xs uppercase mb-2">分析帖子数</p>
-              <h4 class="text-3xl font-headline font-extrabold text-primary">{{ analyticsKpis.content_count }}</h4>
+            <div class="bg-surface-container-lowest p-6 rounded-xl border-l-4 border-violet-400">
+              <div class="flex items-center gap-2 mb-3">
+                <span class="material-symbols-outlined text-violet-400 text-xl">article</span>
+                <p class="text-on-surface-variant text-xs font-bold uppercase tracking-wide">分析帖子数</p>
+              </div>
+              <h4 class="text-3xl font-headline font-extrabold text-primary">{{ displayKpis.content_count }}</h4>
             </div>
             <div class="md:col-span-2 signature-gradient p-6 rounded-xl text-white">
-              <p class="text-xs uppercase opacity-70 mb-2">广告植入效率</p>
-              <h4 class="text-3xl font-headline font-extrabold">{{ analyticsKpis.dispatch_efficiency }}%</h4>
-              <p class="text-sm mt-3 opacity-80">任务已完成 {{ analyticsKpis.completed_tasks }} 次，当前状态：{{ taskStatusText }}</p>
+              <div class="flex items-center gap-2 mb-3">
+                <span class="material-symbols-outlined text-white/80 text-xl">ads_click</span>
+                <p class="text-xs font-bold uppercase tracking-wide opacity-70">广告植入效率</p>
+              </div>
+              <h4 class="text-3xl font-headline font-extrabold">{{ displayKpis.dispatch_efficiency }}%</h4>
+              <p class="text-sm mt-3 opacity-80">任务已完成 {{ displayKpis.completed_tasks }} 次 · {{ taskStatusText }}</p>
             </div>
           </div>
 
+          <!-- 话题热度 + 情感指数 -->
           <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
             <div class="lg:col-span-7 bg-surface-container-lowest p-8 rounded-xl">
-              <div class="flex justify-between items-center mb-5">
-                <h4 class="text-xl font-headline font-bold text-primary">话题频率</h4>
-                <button class="bg-surface-container-low p-2 rounded-lg text-slate-500" @click="notifySoon('筛选功能待接入')"><span class="material-symbols-outlined">filter_list</span></button>
-              </div>
-              <div class="min-h-[280px] flex flex-wrap gap-x-6 gap-y-3 items-center justify-center">
-                <span v-for="tag in analyticsTopics" :key="tag.word" :class="tag.className">{{ tag.word }}</span>
+              <h4 class="text-xl font-headline font-bold text-primary mb-6">话题热度</h4>
+              <div class="min-h-[200px] flex flex-wrap gap-x-4 gap-y-3 items-center justify-center">
+                <span
+                  v-for="(tag, idx) in displayTopics"
+                  :key="tag.word"
+                  :class="tag.className"
+                  :style="{ fontSize: Math.max(0.75, 1.15 - idx * 0.04) + 'rem' }"
+                >{{ tag.word }}</span>
               </div>
             </div>
-            <div class="lg:col-span-5 bg-surface-container-low p-8 rounded-xl">
-              <h4 class="text-xl font-headline font-bold text-primary">情感指数</h4>
-              <div class="space-y-5 mt-6">
-                <div v-for="bar in sentimentBars" :key="bar.label" class="space-y-2">
-                  <div class="flex justify-between text-xs font-bold text-on-surface-variant"><span>{{ bar.label }}</span><span>{{ bar.value }}%</span></div>
-                  <div class="h-2 bg-surface-container-highest rounded-full overflow-hidden"><div class="h-full" :class="bar.colorClass" :style="{ width: `${bar.value}%` }"></div></div>
+            <div class="lg:col-span-5 bg-surface-container-low p-8 rounded-xl flex flex-col">
+              <h4 class="text-xl font-headline font-bold text-primary mb-6">情感分布</h4>
+              <div class="space-y-5 flex-1">
+                <div v-for="bar in displayBars" :key="bar.label">
+                  <div class="flex justify-between text-sm font-bold mb-2">
+                    <span>{{ bar.label }}</span>
+                    <span class="text-on-surface-variant">{{ bar.value }}%</span>
+                  </div>
+                  <div class="h-3 bg-surface-container-highest rounded-full overflow-hidden">
+                    <div class="h-full rounded-full transition-all duration-700" :class="bar.colorClass" :style="{ width: `${bar.value}%` }"></div>
+                  </div>
                 </div>
               </div>
-              <div class="mt-8 pt-6 border-t border-outline-variant/20 text-sm text-on-surface-variant italic">“{{ analyticsInsight }}”</div>
+              <div class="mt-8 pt-6 border-t border-outline-variant/20 text-sm text-on-surface-variant italic">"{{ displayInsight }}"</div>
+            </div>
+          </div>
+
+          <!-- 匹配度分布 -->
+          <div class="bg-surface-container-lowest p-8 rounded-xl">
+            <div class="flex items-center justify-between mb-6">
+              <h4 class="text-xl font-headline font-bold text-primary">匹配度分布</h4>
+              <span class="text-xs text-on-surface-variant">共 {{ reviewQueue.length || mockAnalytics.reviewQueueSample.length }} 条{{ showMockData ? '（演示）' : '' }}</span>
+            </div>
+            <div class="space-y-4">
+              <div v-for="bucket in affinityBuckets" :key="bucket.label" class="flex items-center gap-4">
+                <div class="w-16 text-xs font-bold text-on-surface-variant text-right shrink-0">{{ bucket.label }}</div>
+                <div class="flex-1 h-5 bg-surface-container-highest rounded-full overflow-hidden">
+                  <div class="h-full rounded-full transition-all duration-700" :class="bucket.colorClass" :style="{ width: `${bucket.pct}%` }"></div>
+                </div>
+                <div class="w-10 text-sm font-bold text-right shrink-0">{{ bucket.count }}</div>
+              </div>
             </div>
           </div>
         </section>
@@ -423,6 +462,22 @@ export default {
       lastInsightsSyncedAt: 0,
       reviewSyncStatus: "idle", // idle | refreshing | success | error
       reviewSyncMessage: "点击“刷新评论”可重新拉取后端最新评论。",
+      mockAnalytics: {
+        kpis: { comment_count: 1247, content_count: 23, dispatch_efficiency: 78, completed_tasks: 3 },
+        topics: ['护肤', '成分党', '敏感肌', '控油', '美白', '防晒', '精华', '面膜', '水乳', 'A醇', '玻尿酸', '抗老'],
+        sentimentBars: [
+          { label: '正向', value: 62, colorClass: 'bg-emerald-400' },
+          { label: '中性', value: 28, colorClass: 'bg-blue-400' },
+          { label: '负向', value: 10, colorClass: 'bg-rose-400' },
+        ],
+        insight: '评论区用户对成分透明度需求强烈，"成分党"相关话题高频出现，建议文案侧重突出产品配方亮点。',
+        reviewQueueSample: [
+          { predicted_affinity: 92 }, { predicted_affinity: 88 }, { predicted_affinity: 85 },
+          { predicted_affinity: 83 }, { predicted_affinity: 79 }, { predicted_affinity: 76 },
+          { predicted_affinity: 91 }, { predicted_affinity: 87 }, { predicted_affinity: 72 },
+          { predicted_affinity: 65 }, { predicted_affinity: 93 }, { predicted_affinity: 81 },
+        ],
+      },
     };
   },
   async mounted() {
@@ -575,7 +630,7 @@ export default {
     },
     aiHintText() {
       if (!this.adType) return "请先输入广告主题，系统会根据关键词密度自动评估抓取深度。";
-      return `当前策略将围绕“${this.adType}”在${this.postLimit}条帖子和每帖${this.commentsPerPostLimit}条评论范围内构建语义投放线索。`;
+      return `当前策略将围绕"${this.adType}"在${this.postLimit}条帖子和每帖${this.commentsPerPostLimit}条评论范围内构建语义投放线索。`;
     },
     filteredReviewQueue() {
       const query = this.globalFilter.trim().toLowerCase();
@@ -623,6 +678,50 @@ export default {
       return new Date(this.lastInsightsSyncedAt).toLocaleString("zh-CN", {
         hour12: false,
       });
+    },
+    showMockData() {
+      return this.analyticsKpis.comment_count === 0 && this.taskPhase !== 'running';
+    },
+    displayKpis() {
+      return this.showMockData ? this.mockAnalytics.kpis : this.analyticsKpis;
+    },
+    displayTopics() {
+      const topicClasses = [
+        'text-primary bg-primary/10 px-3 py-1.5 rounded-full text-sm font-semibold cursor-default',
+        'text-secondary bg-secondary/10 px-3 py-1.5 rounded-full text-sm font-semibold cursor-default',
+        'text-tertiary bg-tertiary/10 px-3 py-1.5 rounded-full text-sm font-semibold cursor-default',
+        'text-pink-600 bg-pink-50 px-3 py-1.5 rounded-full text-sm font-semibold cursor-default',
+        'text-amber-600 bg-amber-50 px-3 py-1.5 rounded-full text-sm font-semibold cursor-default',
+      ];
+      const words = this.showMockData
+        ? this.mockAnalytics.topics.map((w, i) => ({ word: w, className: topicClasses[i % topicClasses.length] }))
+        : this.analyticsTopics;
+      return words;
+    },
+    displayBars() {
+      return this.showMockData ? this.mockAnalytics.sentimentBars : this.sentimentBars;
+    },
+    displayInsight() {
+      return this.showMockData ? this.mockAnalytics.insight : this.analyticsInsight;
+    },
+    affinityBuckets() {
+      const queue = this.reviewQueue.length > 0 ? this.reviewQueue : this.mockAnalytics.reviewQueueSample;
+      const buckets = [
+        { label: '≥ 90%', min: 90, colorClass: 'bg-emerald-400', count: 0, pct: 0 },
+        { label: '80–89%', min: 80, colorClass: 'bg-blue-400', count: 0, pct: 0 },
+        { label: '70–79%', min: 70, colorClass: 'bg-amber-400', count: 0, pct: 0 },
+        { label: '< 70%', min: 0, colorClass: 'bg-rose-300', count: 0, pct: 0 },
+      ];
+      queue.forEach(item => {
+        const a = Number(item.predicted_affinity || 0);
+        if (a >= 90) buckets[0].count++;
+        else if (a >= 80) buckets[1].count++;
+        else if (a >= 70) buckets[2].count++;
+        else buckets[3].count++;
+      });
+      const total = queue.length || 1;
+      buckets.forEach(b => { b.pct = Math.round((b.count / total) * 100); });
+      return buckets;
     },
   },
   methods: {
