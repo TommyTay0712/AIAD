@@ -173,6 +173,22 @@ async def _background_crawl(request: CrawlRequest, settings: Any, task_store: An
         asyncio.create_task(_cleanup())
 
 
+@app.on_event("startup")
+async def _warmup() -> None:
+    """启动时预热 embedding 模型，避免第一次请求触发长时加载。"""
+    logger.info("开始预热 keyword_cache embedding 模型...")
+    try:
+        cache = await asyncio.to_thread(_get_keyword_cache)
+        if cache is not None:
+            # 触发一次 dummy embed，强制 sentence-transformers 将模型权重加载到内存
+            await asyncio.to_thread(cache._embedder.embed, ["warmup"])
+            logger.info("embedding 模型预热完成")
+        else:
+            logger.warning("keyword_cache 初始化失败，跳过预热")
+    except Exception as exc:
+        logger.warning("预热失败（不影响服务启动）: %s", exc)
+
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check() -> HealthResponse:
     return HealthResponse(service="crawler")

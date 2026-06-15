@@ -103,7 +103,7 @@ async def _run_pipeline_async(task_id: str, payload: dict[str, Any]) -> None:
             "max_comments_per_note": payload.get("max_comments_per_note", 10),
             "enable_media_download": payload.get("enable_media_download", False),
         },
-        timeout=30,
+        timeout=90,  # 宽裕超时：crawler 冷启动时 embedding 模型加载需时
     )
     if start_result.get("status") == "error":
         emit({"type": "error", "message": f"启动爬虫失败: {start_result.get('message', '')}"})
