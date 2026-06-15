@@ -36,15 +36,26 @@ _event_queues: dict[str, stdlib_queue.Queue] = {}
 _event_queue_created: dict[str, float] = {}
 # 任务最终结果缓存
 _task_results: dict[str, dict[str, Any]] = {}
-# 任务中间状态（评论 + 已完成的广告文案），供断线重连后恢复 reviewQueue
+# 任务中间状态（评论 + 已完成的广告文案 + NLP结果），供断线重连后恢复 reviewQueue 及实时看板
 _task_partial: dict[str, dict[str, Any]] = {}
 
 
-def _affinity_from_likes(likes: int) -> int:
-    """根据点赞数计算置信度，对数缩放，范围 70–95。"""
-    if likes <= 0:
-        return 70
-    return min(95, 70 + int(math.log10(likes + 1) * 10))
+def _affinity_score(comment: dict[str, Any]) -> int:
+    """根据评论内容和点赞数综合计算匹配度 (70–95)。
+    点赞为主信号；内容长度和意图标记为副信号，解决 liked_count 全为0时分布扁平的问题。
+    """
+    if not isinstance(comment, dict):
+        return 72
+    content = str(comment.get("content", ""))
+    likes = int(comment.get("liked_count", 0) or comment.get("likes", 0))
+    # 点赞主信号（0点赞=0分，避免虚增基础分）
+    like_score = min(18, int(math.log10(likes + 1) * 10)) if likes > 0 else 0
+    # 内容长度副信号（区分零点赞评论）
+    n = len(content.strip())
+    len_score = 8 if n >= 80 else 5 if n >= 40 else 2 if n >= 15 else 0
+    # 互动意图标记（问句/感叹句）
+    intent_score = 2 if any(c in content for c in ["?", "？", "!", "！"]) else 0
+    return min(95, 70 + like_score + len_score + intent_score)
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -76,10 +87,11 @@ async def _run_pipeline_async(task_id: str, payload: dict[str, Any]) -> None:
     """
     完整管道（async）：
     1. 非阻塞启动爬虫
-    2. 边轮询边推进度；攒够 ANALYSIS_BATCH 条评论就先做 NLP 分析
-    3. 爬完后用全量评论做文案生成
+    2. 边轮询边推进度；攒够 ANALYSIS_BATCH 条就立即做 NLP + 风格文案 + 第一批回复
+    3. 爬完后处理剩余评论的逐批回复
     """
-    ANALYSIS_BATCH = 20  # 攒够多少条先做 NLP 分析
+    ANALYSIS_BATCH = 20  # 攒够多少条触发早期分析
+    REPLY_BATCH = 15     # 每批回复数量
 
     event_q = _event_queues.get(task_id)
 
@@ -116,7 +128,9 @@ async def _run_pipeline_async(task_id: str, payload: dict[str, Any]) -> None:
     all_comments: list[dict[str, Any]] = []
     raw_comment_ads: dict[str, str] = {}
     analysis_result: dict[str, Any] = {}
+    copy_result: dict[str, Any] = {}
     analysis_started = False
+    early_batch_done_offset = 0  # 已完成 batch_reply 的评论偏移量（早期批次）
     # 实时快照：用引用跟踪，后续追加/更新自动反映
     _task_partial[task_id] = {"comments": all_comments, "comment_ads": raw_comment_ads}
 
@@ -162,7 +176,7 @@ async def _run_pipeline_async(task_id: str, payload: dict[str, Any]) -> None:
                                 "note_id": str(nc.get("note_id", "")),
                                 "ad_text": "",
                                 "focus": "",
-                                "predicted_affinity": _affinity_from_likes(likes_val),
+                                "predicted_affinity": _affinity_score(nc),
                                 "platform": "小红书",
                             },
                         })
@@ -170,7 +184,7 @@ async def _run_pipeline_async(task_id: str, payload: dict[str, Any]) -> None:
                 emit({"type": "progress", "stage": "crawling", "percent": 15,
                       "message": f"已采集 {comment_offset} 条评论，持续抓取中..."})
 
-            # 攒够 ANALYSIS_BATCH 条就先跑 NLP 分析（只跑一次）
+            # 攒够 ANALYSIS_BATCH 条就先跑：NLP 分析、风格文案、第一批回复（只触发一次）
             if not analysis_started and len(all_comments) >= ANALYSIS_BATCH:
                 analysis_started = True
                 emit({"type": "progress", "stage": "analyzing", "percent": 35,
@@ -185,6 +199,54 @@ async def _run_pipeline_async(task_id: str, payload: dict[str, Any]) -> None:
                     },
                     timeout=600,
                 )
+                # NLP 结果存入 partial，供 insights 端点在运行中也能返回分析数据
+                _task_partial[task_id]["nlp_analysis"] = analysis_result.get("nlp_analysis", {})
+
+                # 风格文案提前生成（后台爬虫仍在继续）
+                emit({"type": "progress", "stage": "copywriting", "percent": 60,
+                      "message": "品牌风格文案生成中（后台持续采集）..."})
+                copy_result = await _call_service(
+                    f"{config.copywriter_service_url}/generate",
+                    {
+                        "task_id": task_id,
+                        "request_info": payload,
+                        "vision_analysis": analysis_result.get("vision_analysis", {}),
+                        "nlp_analysis": analysis_result.get("nlp_analysis", {}),
+                        "rag_references": analysis_result.get("rag_references", []),
+                    },
+                    timeout=300,
+                )
+
+                # 第一批 batch_reply（针对已有的 ANALYSIS_BATCH 条，不等爬虫完成）
+                nlp_data = analysis_result.get("nlp_analysis", {})
+                first_batch_comments = list(all_comments[:ANALYSIS_BATCH])
+                n_first = max(1, (len(first_batch_comments) + REPLY_BATCH - 1) // REPLY_BATCH)
+                for bidx in range(n_first):
+                    if bidx > 0:
+                        await asyncio.sleep(2)
+                    b_start = bidx * REPLY_BATCH
+                    batch = first_batch_comments[b_start:b_start + REPLY_BATCH]
+                    emit({"type": "progress", "stage": "copywriting",
+                          "percent": 65 + int((bidx + 1) / n_first * 10),
+                          "message": f"早批回复生成中（{bidx + 1}/{n_first}，后台继续采集）..."})
+                    batch_result = await _call_service(
+                        f"{config.copywriter_service_url}/generate/batch_reply",
+                        {
+                            "task_id": task_id,
+                            "comments": batch,
+                            "nlp_analysis": nlp_data,
+                            "request_info": payload,
+                            "offset": b_start,
+                        },
+                        timeout=300,
+                    )
+                    ads = batch_result.get("comment_ads", {})
+                    if ads:
+                        raw_comment_ads.update(ads)
+                        keyed = {f"{task_id}_{k}": v for k, v in ads.items() if v}
+                        if keyed:
+                            emit({"type": "comment_ads_partial", "comment_ads": keyed})
+                early_batch_done_offset = len(first_batch_comments)
 
             if status in ("done", "error"):
                 if status == "error":
@@ -192,7 +254,7 @@ async def _run_pipeline_async(task_id: str, payload: dict[str, Any]) -> None:
                     return
                 break
 
-        # — 爬完，补做 NLP 分析（如果评论太少没触发）—
+        # — 爬完，补做 NLP + 风格文案（仅在评论太少、早期分析未触发时）—
         if not analysis_started:
             emit({"type": "progress", "stage": "analyzing", "percent": 50, "message": "AI 分析中..."})
             analysis_result = await _call_service(
@@ -205,36 +267,35 @@ async def _run_pipeline_async(task_id: str, payload: dict[str, Any]) -> None:
                 },
                 timeout=600,
             )
+            _task_partial[task_id]["nlp_analysis"] = analysis_result.get("nlp_analysis", {})
 
-        # — 风格文案生成（3 种风格，不含逐评论回复）—
-        emit({"type": "progress", "stage": "copywriting", "percent": 78, "message": "品牌风格文案生成中..."})
-        copy_result = await _call_service(
-            f"{config.copywriter_service_url}/generate",
-            {
-                "task_id": task_id,
-                "request_info": payload,
-                "vision_analysis": analysis_result.get("vision_analysis", {}),
-                "nlp_analysis": analysis_result.get("nlp_analysis", {}),
-                "rag_references": analysis_result.get("rag_references", []),
-            },
-            timeout=300,
-        )
+            emit({"type": "progress", "stage": "copywriting", "percent": 78, "message": "品牌风格文案生成中..."})
+            copy_result = await _call_service(
+                f"{config.copywriter_service_url}/generate",
+                {
+                    "task_id": task_id,
+                    "request_info": payload,
+                    "vision_analysis": analysis_result.get("vision_analysis", {}),
+                    "nlp_analysis": analysis_result.get("nlp_analysis", {}),
+                    "rag_references": analysis_result.get("rag_references", []),
+                },
+                timeout=300,
+            )
 
-        # — 逐评论回复（全量，逐批调用，每批完成立即推送 SSE）—
-        REPLY_BATCH = 15
-        reply_comments = all_comments  # 不限制条数，全量处理
+        # — 逐评论回复（处理早批之后的剩余评论）—
+        remaining_comments = all_comments[early_batch_done_offset:]
         nlp_data = analysis_result.get("nlp_analysis", {})
-        n_batches = max(1, (len(reply_comments) + REPLY_BATCH - 1) // REPLY_BATCH)
+        n_remaining = max(1, (len(remaining_comments) + REPLY_BATCH - 1) // REPLY_BATCH) if remaining_comments else 0
 
-        for batch_idx in range(n_batches):
+        for batch_idx in range(n_remaining):
             if batch_idx > 0:
                 await asyncio.sleep(2)  # 批次间隔，降低限流概率
-            start = batch_idx * REPLY_BATCH
-            batch = reply_comments[start : start + REPLY_BATCH]
-            pct = 80 + int(batch_idx / n_batches * 18)
+            abs_start = early_batch_done_offset + batch_idx * REPLY_BATCH
+            batch = all_comments[abs_start:abs_start + REPLY_BATCH]
+            pct = 80 + int((batch_idx + 1) / max(1, n_remaining) * 18)
             emit({
                 "type": "progress", "stage": "copywriting", "percent": pct,
-                "message": f"逐评论回复生成中（{batch_idx + 1}/{n_batches} 批，共 {len(reply_comments)} 条）...",
+                "message": f"逐评论回复生成中（{batch_idx + 1}/{n_remaining} 批，剩余 {len(remaining_comments)} 条）...",
             })
             batch_result = await _call_service(
                 f"{config.copywriter_service_url}/generate/batch_reply",
@@ -243,7 +304,7 @@ async def _run_pipeline_async(task_id: str, payload: dict[str, Any]) -> None:
                     "comments": batch,
                     "nlp_analysis": nlp_data,
                     "request_info": payload,
-                    "offset": start,
+                    "offset": abs_start,
                 },
                 timeout=300,
             )
@@ -255,7 +316,7 @@ async def _run_pipeline_async(task_id: str, payload: dict[str, Any]) -> None:
                     emit({"type": "comment_ads_partial", "comment_ads": keyed})
             elif batch_result.get("status") == "error":
                 logger.warning("批次 %d/%d 回复生成失败，跳过继续：%s",
-                               batch_idx + 1, n_batches, batch_result.get("message", ""))
+                               batch_idx + 1, n_remaining, batch_result.get("message", ""))
 
         _task_partial.pop(task_id, None)  # 任务完成，最终结果存入 _task_results
         _task_results[task_id] = {
@@ -295,7 +356,6 @@ async def _call_service(url: str, payload: dict[str, Any], timeout: float = 300)
 
 
 
-
 @router.post("/run")
 def run_analysis(
     payload: dict[str, Any],
@@ -328,10 +388,81 @@ def get_task_meta(task_id: str) -> dict[str, Any]:
 
 @router.get("/task/{task_id}/insights")
 def get_task_insights(task_id: str) -> dict[str, Any]:
-    """返回任务洞察数据，供前端 review 页渲染。"""
+    """返回任务洞察数据，供前端 review 页渲染。运行中时从 partial 快照返回实时数据。"""
     result = _task_results.get(task_id, {})
-    # 任务尚未完成时返回空状态，避免前端显示错误的 100% 进度
     if not result:
+        # 检查是否有运行中的中间快照
+        partial = _task_partial.get(task_id)
+        if partial:
+            comments: list[dict[str, Any]] = list(partial.get("comments", []))
+            comment_ads: dict[str, str] = dict(partial.get("comment_ads", {}))
+            nlp: dict[str, Any] = partial.get("nlp_analysis", {})
+            focus = nlp.get("keyword_summary", [""])[0] if nlp.get("keyword_summary") else ""
+            partial_queue: list[dict[str, Any]] = []
+            for i, c in enumerate(comments):
+                if isinstance(c, dict):
+                    user_info = c.get("user_info", {})
+                    author = (
+                        user_info.get("nickname", "") if isinstance(user_info, dict) else ""
+                    ) or c.get("user", "匿名")
+                    source_text = c.get("content", "")
+                    likes = int(c.get("liked_count", 0) or c.get("likes", 0))
+                    note_id = str(c.get("note_id", ""))
+                else:
+                    author, source_text, likes, note_id = "匿名", str(c), 0, ""
+                if not source_text:
+                    continue
+                partial_queue.append({
+                    "comment_id": f"{task_id}_{i}",
+                    "source_text": source_text,
+                    "ad_text": comment_ads.get(str(i), ""),
+                    "author": author,
+                    "likes": likes,
+                    "note_id": note_id,
+                    "focus": focus,
+                    "predicted_affinity": _affinity_score(c if isinstance(c, dict) else {}),
+                    "platform": "小红书",
+                })
+            note_ids = {
+                str(c.get("note_id", ""))
+                for c in comments
+                if isinstance(c, dict) and c.get("note_id")
+            }
+            done_ads = sum(1 for v in comment_ads.values() if v)
+            dispatch_eff = int(done_ads / max(1, len(partial_queue)) * 100) if partial_queue else 0
+            emotion = nlp.get("main_emotion", "")
+            if any(w in emotion for w in ["积极", "正面", "好评", "热情", "种草"]):
+                pos_val, neg_val, neu_val = 72, 12, 16
+            elif any(w in emotion for w in ["消极", "负面", "差评", "抱怨", "失望"]):
+                pos_val, neg_val, neu_val = 18, 64, 18
+            else:
+                pos_val, neg_val, neu_val = 48, 18, 34
+            return {
+                "review_queue": partial_queue,
+                "comment_ads_status": "processing",
+                "comment_ads_progress": {"done": done_ads, "total": len(partial_queue)},
+                "progress": {
+                    "step": {"current": 2, "total": 4, "label": "分析与生成中", "percent": 60},
+                    "metrics": {"posts_scanned": len(note_ids), "comments_read": len(comments)},
+                    "logs": [],
+                },
+                "analytics": {
+                    "kpis": {
+                        "comment_count": len(comments),
+                        "content_count": len(note_ids),
+                        "dispatch_efficiency": dispatch_eff,
+                        "completed_tasks": 0,
+                    },
+                    "sentiment_bars": [
+                        {"label": "积极情感", "value": pos_val, "colorClass": "bg-green-500"},
+                        {"label": "中性情感", "value": neu_val, "colorClass": "bg-slate-400"},
+                        {"label": "消极情感", "value": neg_val, "colorClass": "bg-red-400"},
+                    ] if emotion else [],
+                    "topic_cloud": nlp.get("keyword_summary", []),
+                    "insight": emotion or "",
+                },
+            }
+        # 任务尚未完成且无中间快照时返回空状态
         return {
             "review_queue": [],
             "comment_ads_status": "pending",
@@ -348,6 +479,7 @@ def get_task_insights(task_id: str) -> dict[str, Any]:
                 "insight": "",
             },
         }
+
     nlp = result.get("nlp_analysis", {})
     comment_ads: dict[str, str] = result.get("comment_ads", {})
     comments = result.get("comments", [])
@@ -379,7 +511,7 @@ def get_task_insights(task_id: str) -> dict[str, Any]:
             "likes": likes,
             "note_id": note_id,
             "focus": focus,
-            "predicted_affinity": _affinity_from_likes(likes),
+            "predicted_affinity": _affinity_score(c if isinstance(c, dict) else {}),
             "platform": "小红书",
         })
 
@@ -399,6 +531,10 @@ def get_task_insights(task_id: str) -> dict[str, Any]:
     else:
         pos_val, neg_val, neu_val = 48, 18, 34
 
+    # 真实派发效率：已生成文案的评论占比
+    done_ads = sum(1 for v in comment_ads.values() if v)
+    dispatch_eff = int(done_ads / max(1, len(review_queue)) * 100) if review_queue else 85
+
     return {
         "review_queue": review_queue,
         "comment_ads_status": "complete",
@@ -412,7 +548,7 @@ def get_task_insights(task_id: str) -> dict[str, Any]:
             "kpis": {
                 "comment_count": len(comments),
                 "content_count": len(note_ids),
-                "dispatch_efficiency": 85,
+                "dispatch_efficiency": dispatch_eff,
                 "completed_tasks": 1 if result else 0,
             },
             "sentiment_bars": [

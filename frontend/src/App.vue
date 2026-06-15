@@ -216,6 +216,17 @@
                     <span class="material-symbols-outlined text-sm">favorite</span>
                     <span>{{ item.likes }}</span>
                   </span>
+                  <a
+                    v-if="item.note_id"
+                    :href="'https://www.xiaohongshu.com/explore/' + item.note_id"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="flex items-center gap-0.5 text-blue-500 hover:text-blue-700 ml-1"
+                    title="查看原帖"
+                  >
+                    <span class="material-symbols-outlined text-sm">open_in_new</span>
+                    <span>原帖</span>
+                  </a>
                 </div>
                 <div class="bg-surface-container-low p-4 rounded-xl text-sm italic">{{ item.source_text }}</div>
               </div>
@@ -967,6 +978,10 @@ export default {
                   const ad = ads[item.comment_id];
                   return ad !== undefined ? { ...item, ad_text: ad } : item;
                 });
+                // 每批文案完成后刷新看板分析数据（节流：15s 内不重复请求）
+                if (Date.now() - this.lastInsightsSyncedAt > 15000) {
+                  this.loadInsights({ updateReviewState: false }).catch(() => {});
+                }
               } else if (event.type === "crawler_log") {
                 this.progressLogs = [
                   `${now} [CRAWLER] ${event.line}`,
