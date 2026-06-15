@@ -46,12 +46,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     keyword_cache = build_keyword_cache(settings)
     app.state.keyword_cache = keyword_cache
 
+    # ChromaStore 单例：每个 worker 进程只创建一个 PersistentClient，避免多客户端竞争同一 SQLite
+    from app.services.chroma_store import ChromaStore
+    app.state.chroma_store = ChromaStore(settings.chroma_persist_dir)
+
     # in-flight 去重：记录正在爬取的关键词，后来者等待而非重复爬取
     app.state.inflight_keywords = {}  # dict[str, threading.Event]
     app.state.inflight_lock = threading.Lock()
 
     # SSE 事件队列：每个 task_id 对应一个 Queue，后台线程写入，SSE 端点消费
+    # SEC-10: 使用有界队列防止内存泄漏
     app.state.task_event_queues = {}  # dict[str, stdlib_queue.Queue]
+    app.state.task_event_queue_created = {}  # dict[str, float] — 创建时间戳
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(

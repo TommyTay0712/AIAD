@@ -34,6 +34,10 @@ def _build_mediacrawler_bootstrap_script() -> str:
         "import runpy, sys, config\n"
         "config.CRAWLER_MAX_NOTES_COUNT = int(sys.argv[1])\n"
         "config.ENABLE_GET_MEIDAS = sys.argv[2].lower() in ('1','true','yes','y')\n"
+        # 让 MediaCrawler 自行管理 Chrome 的启动和关闭，而不是等待用户手动开启远程调试
+        "config.CDP_CONNECT_EXISTING = False\n"
+        # 给用户足够的时间完成登录（扫码 + 手机验证），默认 300s
+        "config.BROWSER_LAUNCH_TIMEOUT = 300\n"
         "sys.argv = ['main.py'] + sys.argv[3:]\n"
         "runpy.run_module('main', run_name='__main__')\n"
     )
@@ -88,7 +92,18 @@ def _stream_subprocess(
     t_err = threading.Thread(target=_reader, args=(proc.stderr, stderr_lines), daemon=True)
     t_out.start()
     t_err.start()
-    proc.wait()
+    timeout_seconds = int(os.environ.get("CRAWLER_SUBPROCESS_TIMEOUT", "480"))
+    try:
+        proc.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        stderr_lines.append(f"TIMEOUT: 爬虫子进程超过 {timeout_seconds}s 未结束，已强制终止")
+        if emit_fn:
+            try:
+                emit_fn({"type": "crawler_log", "line": f"[TIMEOUT] 爬虫进程超时（{timeout_seconds}s），请检查平台登录状态"})
+            except Exception:
+                pass
     t_out.join(timeout=15)
     t_err.join(timeout=15)
 
@@ -249,6 +264,8 @@ def run_crawler(
     run_output_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["PLAYWRIGHT_BROWSERS_PATH"] = str(settings.playwright_browsers_path)
+    env["AIAD_TASK_ID"] = task_id
+    env["AIAD_QRCODE_DIR"] = str(settings.crawler_output_dir)
     started_at = datetime.now().timestamp()
     result: subprocess.CompletedProcess[str] | None = None
     for login_type in ("cookie", "qrcode"):
@@ -266,7 +283,7 @@ def run_crawler(
             "--save_data_option",
             "jsonl",
             "--headless",
-            "false",
+            "true" if settings.headless_browser else "false",
             "--save_data_path",
             str(run_output_dir),
         ]

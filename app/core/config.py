@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import os
 import shutil
 import sys
@@ -49,7 +50,7 @@ class Settings(BaseModel):
     )
     logs_dir: Path = Field(default=Path(__file__).resolve().parents[2] / "logs")
     task_store_file: Path = Field(
-        default=Path(__file__).resolve().parents[2] / "data" / "tasks.json"
+        default=Path(__file__).resolve().parents[2] / "data" / "tasks.db"
     )
     chroma_persist_dir: Path = Field(
         default=Path(__file__).resolve().parents[2] / "data" / "chroma"
@@ -58,6 +59,7 @@ class Settings(BaseModel):
     playwright_browsers_path: Path = Field(
         default=Path(__file__).resolve().parents[2] / ".ms-playwright"
     )
+    headless_browser: bool = Field(default=False)
     log_level: str = Field(default="INFO")
     vision_provider: str = Field(default="mock")
     vision_model: str = Field(default="Qwen/Qwen3.5-397B-A17B")
@@ -82,6 +84,16 @@ class Settings(BaseModel):
     )
 
 
+def validate_path_sandbox(path: Path, allowed_root: Path) -> Path:
+    """SEC-12: 校验路径是否在允许的根目录内，防止路径穿越攻击。"""
+    resolved = path.resolve()
+    root = allowed_root.resolve()
+    if not str(resolved).startswith(str(root)):
+        raise ValueError(f"路径越界：{resolved} 不在允许的根目录 {root} 内")
+    return resolved
+
+
+@functools.lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """加载环境变量并返回配置。"""
     load_dotenv()
@@ -93,7 +105,7 @@ def get_settings() -> Settings:
         crawler_output_dir=_resolve_path(project_root, "CRAWLER_OUTPUT_DIR", "data/raw"),
         processed_output_dir=_resolve_path(project_root, "PROCESSED_OUTPUT_DIR", "data/processed"),
         logs_dir=_resolve_path(project_root, "LOGS_DIR", "logs"),
-        task_store_file=_resolve_path(project_root, "TASK_STORE_FILE", "data/tasks.json"),
+        task_store_file=_resolve_path(project_root, "TASK_STORE_FILE", "data/tasks.db"),
         chroma_persist_dir=_resolve_path(project_root, "CHROMA_PERSIST_DIR", "data/chroma"),
         mediacrawler_python_exe=_resolve_executable(
             project_root, "MEDIACRAWLER_PYTHON_EXE", sys.executable
@@ -101,6 +113,7 @@ def get_settings() -> Settings:
         playwright_browsers_path=_resolve_path(
             project_root, "PLAYWRIGHT_BROWSERS_PATH", ".ms-playwright"
         ),
+        headless_browser=os.getenv("HEADLESS_BROWSER", "false").lower() in {"1", "true", "yes"},
         log_level=_resolve_text("LOG_LEVEL", "INFO"),
         vision_provider=_resolve_text("VISION_PROVIDER", "modelscope"),
         vision_model=_resolve_text("VISION_MODEL", "Qwen/Qwen3.5-397B-A17B"),
@@ -135,6 +148,5 @@ def get_settings() -> Settings:
     settings.chroma_persist_dir.mkdir(parents=True, exist_ok=True)
     settings.playwright_browsers_path.mkdir(parents=True, exist_ok=True)
     settings.task_store_file.parent.mkdir(parents=True, exist_ok=True)
-    if not settings.task_store_file.exists():
-        settings.task_store_file.write_text("{}", encoding="utf-8")
+    # SQLite 文件由 TaskStore._init_db() 在首次实例化时自动创建，此处无需预建
     return settings

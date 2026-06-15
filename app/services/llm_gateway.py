@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import ast
 import json
 import logging
 import re
+import time
 from typing import Any
 
 import httpx
@@ -46,11 +46,6 @@ def _extract_json_payload(text: str) -> Any:
     if values:
         return values if len(values) > 1 else values[0]
 
-    for candidate in (cleaned, f"({cleaned})"):
-        try:
-            return ast.literal_eval(candidate)
-        except (ValueError, SyntaxError):
-            pass
 
     array_match = re.search(r"(\[[\s\S]*\])", cleaned)
     if array_match:
@@ -58,24 +53,14 @@ def _extract_json_payload(text: str) -> Any:
         try:
             return json.loads(candidate)
         except json.JSONDecodeError:
-            for literal_candidate in (candidate, f"({candidate})"):
-                try:
-                    return ast.literal_eval(literal_candidate)
-                except (ValueError, SyntaxError):
-                    pass
-
+            pass
     object_match = re.search(r"(\{[\s\S]*\})", cleaned)
     if object_match:
         candidate = object_match.group(1)
         try:
             return json.loads(candidate)
         except json.JSONDecodeError:
-            for literal_candidate in (candidate, f"({candidate})"):
-                try:
-                    return ast.literal_eval(literal_candidate)
-                except (ValueError, SyntaxError):
-                    pass
-
+            pass
     raise ValueError("LLM 输出中未提取到有效 JSON")
 
 
@@ -131,6 +116,56 @@ class OpenAICompatibleGateway:
         self.provider = provider
         self._transport = transport
 
+    def _post_with_retry(self, request_payload: dict[str, Any]) -> Any:
+        """发送请求，遇到限流（choices=null）自动重试，最多 3 次，指数退避。"""
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        max_retries = 3
+        for attempt in range(max_retries):
+            with httpx.Client(timeout=self.timeout_seconds, transport=self._transport) as client:
+                response = client.post(
+                    f"{self.base_url}/chat/completions",
+                    json=request_payload,
+                    headers=headers,
+                )
+                response.raise_for_status()
+            payload = response.json()
+            choices = payload.get("choices")
+            if choices:  # 正常响应
+                return payload
+            # choices 为 null/[] 视为限流，等待后重试
+            wait = 2 ** attempt * 5  # 5s, 10s, 20s
+            logger.warning(
+                "LLM 返回空 choices（疑似限流），第 %d/%d 次重试，等待 %ds",
+                attempt + 1, max_retries, wait,
+            )
+            if attempt < max_retries - 1:
+                time.sleep(wait)
+        return payload  # 最后一次结果，调用方判断
+
+    def chat(self, system_prompt: str, user_prompt: str) -> str:
+        """通用 LLM 调用，返回原始输出文本（不做 final_ads 解析）。"""
+        request_payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+        try:
+            payload = self._post_with_retry(request_payload)
+            choices = payload.get("choices") or []
+            if not choices:
+                logger.error("LLM chat 重试后仍返回空 choices model=%s", self.model)
+                return ""
+            return choices[0].get("message", {}).get("content", "")
+        except Exception as exc:
+            logger.error("LLM chat 请求失败 model=%s error=%s", self.model, exc)
+            return ""
+
     def generate(self, prompt_bundle: dict[str, Any]) -> dict[str, Any]:
         request_payload = {
             "model": self.model,
@@ -141,21 +176,8 @@ class OpenAICompatibleGateway:
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
         }
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-
         try:
-            with httpx.Client(
-                timeout=self.timeout_seconds,
-                transport=self._transport,
-            ) as client:
-                response = client.post(
-                    f"{self.base_url}/chat/completions",
-                    json=request_payload,
-                    headers=headers,
-                )
-                response.raise_for_status()
+            payload = self._post_with_retry(request_payload)
         except httpx.HTTPError as exc:
             logger.error(
                 "LLM HTTP 请求失败 provider=%s model=%s prompt_version=%s error=%s",
@@ -175,9 +197,8 @@ class OpenAICompatibleGateway:
                 "review_score": 0,
             }
 
-        raw_response = response.text
+        raw_response = json.dumps(payload)
         try:
-            payload = response.json()
             choices = payload.get("choices")
             if not choices or not isinstance(choices, list):
                 raise ValueError(f"无效的 choices 结构: {payload}")

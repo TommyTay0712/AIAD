@@ -110,6 +110,12 @@ export async function getTaskStatus(taskId: string) {
     return requestJson<Record<string, unknown>>(AGENT6_ENDPOINTS.taskStatus(taskId))
 }
 
+export async function getTaskPartial(taskId: string) {
+    return requestJson<{ comments: Record<string, unknown>[]; comment_ads: Record<string, string> }>(
+        AGENT6_ENDPOINTS.taskPartial(taskId),
+    )
+}
+
 export async function getTaskMeta(taskId: string) {
     return requestJson<Record<string, unknown>>(AGENT6_ENDPOINTS.taskMeta(taskId))
 }

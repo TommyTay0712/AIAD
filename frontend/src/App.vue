@@ -222,7 +222,8 @@
               <div class="flex-[1.5] space-y-3">
                 <div class="flex justify-between items-center">
                   <span class="px-3 py-1 bg-tertiary-container text-on-tertiary-container rounded-full text-[10px] font-bold uppercase">AI建议文案</span>
-                  <span class="text-xs text-secondary font-bold">{{ item.predicted_affinity }}% 匹配度</span>
+                  <span v-if="item.ad_text" class="text-xs text-secondary font-bold">{{ item.predicted_affinity }}% 匹配度</span>
+                  <span v-else class="text-xs text-on-surface-variant/50">待生成</span>
                 </div>
                 <div class="bg-primary/5 p-4 rounded-xl text-sm">{{ item.ad_text }}</div>
                 <div class="text-xs text-on-surface-variant">投放方向：{{ item.focus }}</div>
@@ -302,6 +303,7 @@
           </div>
         </section>
 
+
         <section class="p-12 max-w-7xl mx-auto space-y-8" v-if="activeScreen === 'analytics'">
           <div>
             <span class="text-secondary font-bold text-xs uppercase tracking-widest bg-secondary-container/20 px-3 py-1 rounded-full">报告：实时分析</span>
@@ -359,6 +361,8 @@ import { AGENT6_CONFIG } from './config/agent6';
 import {
   getTaskInsights,
   getTaskMeta,
+  getTaskPartial,
+  getTaskStatus,
   streamTaskEvents,
   submitTask,
   toUserErrorMessage,
@@ -421,9 +425,96 @@ export default {
       reviewSyncMessage: "点击“刷新评论”可重新拉取后端最新评论。",
     };
   },
-  mounted() {
+  async mounted() {
     this.syncScreenFromPath();
     window.addEventListener("popstate", this.handlePopState);
+    const saved = localStorage.getItem('aiad_task_id');
+    if (!saved) return;
+    this.taskId = saved;
+    try {
+      const statusData = await getTaskStatus(saved);
+      const status = String(statusData.status || 'not_found');
+      if (status === 'done') {
+        // 任务已完成，恢复结果
+        const ok = await this.loadInsights({ updateReviewState: false });
+        if (ok && this.reviewQueue.length > 0) {
+          this.setTaskPhase('success');
+          this.reviewSyncMessage = `已恢复上次任务，共 ${this.reviewQueue.length} 条评论。`;
+        }
+      } else if (status === 'running') {
+        // 任务仍在运行，重连 SSE
+        this.setTaskPhase('running');
+        this.isRunning = true;
+        this.setActiveScreen('progress');
+        this.progressStep = { current: 1, total: 4, label: "重连中...", percent: 5 };
+        this.progressLogs = [`${new Date().toLocaleTimeString()} [RECONNECT] 已重连至后台任务`];
+        this.startedAtMs = Date.now();
+        const timer = setInterval(() => this.updateElapsed(), 1000);
+        // 先拉中间快照，恢复已有评论和已完成的广告文案
+        try {
+          const partial = await getTaskPartial(saved);
+          const comments = Array.isArray(partial.comments) ? partial.comments : [];
+          const commentAds = partial.comment_ads || {};
+          const affinityFromLikes = (likes) =>
+            likes <= 0 ? 70 : Math.min(95, 70 + Math.floor(Math.log10(likes + 1) * 10));
+          this.reviewQueue = comments
+            .map((c, i) => {
+              if (!c || !c.content) return null;
+              const likes = Number(c.liked_count || c.likes || 0);
+              return {
+                comment_id: `${saved}_${i}`,
+                source_text: String(c.content || ''),
+                author: String((c.user_info && c.user_info.nickname) || c.user || '匿名'),
+                likes,
+                note_id: String(c.note_id || ''),
+                ad_text: String(commentAds[String(i)] || ''),
+                focus: '',
+                predicted_affinity: affinityFromLikes(likes),
+                platform: '小红书',
+              };
+            })
+            .filter(Boolean);
+          if (this.reviewQueue.length > 0) {
+            this.streamingComments = [...this.reviewQueue].slice(-5).reverse();
+            this.reviewSyncStatus = 'success';
+            this.reviewSyncMessage = `已恢复 ${this.reviewQueue.length} 条评论，继续等待文案生成...`;
+            this.lastInsightsSyncedAt = Date.now();
+          }
+        } catch (_e) {
+          // 快照拉取失败不影响重连，继续走 SSE
+        }
+        try {
+          await this._attachSseStream(saved);
+          const meta = await getTaskMeta(saved);
+          this.taskMeta = meta;
+          this.setTaskPhase('success');
+          this.progressStep = { current: 4, total: 4, label: "分析完成", percent: 100 };
+          await this.loadInsights();
+          this.setActiveScreen('review');
+          if (this.commentAdsStatus && this.commentAdsStatus !== 'complete') {
+            this._startCommentAdsPolling();
+          }
+        } catch (error) {
+          this.setTaskPhase('error');
+          this.errorText = toUserErrorMessage(error);
+        } finally {
+          clearInterval(timer);
+          this.updateElapsed();
+          this.isRunning = false;
+        }
+      } else {
+        // not_found：服务重启导致任务丢失，清除本地记录
+        localStorage.removeItem('aiad_task_id');
+        this.taskId = '';
+      }
+    } catch {
+      // 状态接口失败，降级：尝试直接 loadInsights
+      const ok = await this.loadInsights({ updateReviewState: false });
+      if (ok && this.reviewQueue.length > 0) {
+        this.setTaskPhase('success');
+        this.reviewSyncMessage = `已恢复上次任务，共 ${this.reviewQueue.length} 条评论。`;
+      }
+    }
   },
   beforeUnmount() {
     window.removeEventListener("popstate", this.handlePopState);
@@ -571,6 +662,7 @@ export default {
       this.setTaskPhase("idle");
       this.errorText = "";
       this.taskId = "";
+      localStorage.removeItem('aiad_task_id');
       this.pollCount = 0;
       this.elapsedSeconds = 0;
       this.lastInsightsSyncedAt = 0;
@@ -603,6 +695,15 @@ export default {
         console.error('复制失败:', err);
         this.notifySoon('复制失败，请手动复制');
       }
+    },
+    copyAdText(item) {
+      const text = item?.ad_text || "";
+      if (!text) { this.notifySoon("暂无文案可复制"); return; }
+      navigator.clipboard.writeText(text).then(() => {
+        this.notifySoon("文案已复制到剪贴板");
+      }).catch(() => {
+        this.notifySoon("复制失败，请手动选中文案");
+      });
     },
     setTaskPhase(phase) {
       const statusTextMap = {
@@ -643,21 +744,57 @@ export default {
       if (!this.taskId) return;
       try {
         const insights = await getTaskInsights(this.taskId);
-        this.reviewQueue = Array.isArray(insights.review_queue)
+        const isRunning = this.taskPhase === 'running';
+        const incoming = Array.isArray(insights.review_queue)
           ? insights.review_queue.map((item) => ({
-            ...item,
-            likes: Number(item.likes || 0),
-            note_id: String(item.note_id || ""),
-          }))
+              ...item,
+              likes: Number(item.likes || 0),
+              note_id: String(item.note_id || ""),
+            }))
           : [];
-        this.commentAdsStatus = insights.comment_ads_status || "";
-        this.commentAdsProgress = insights.comment_ads_progress || { done: 0, total: 0 };
-        this.progressStep = insights.progress?.step || this.progressStep;
-        this.progressMetrics = insights.progress?.metrics || this.progressMetrics;
-        this.progressLogs = insights.progress?.logs || [];
-        this.analyticsKpis = insights.analytics?.kpis || this.analyticsKpis;
+
+        if (incoming.length > 0) {
+          if (isRunning) {
+            // 运行中：合并，追加新项目 + 回填 ad_text
+            const existingIds = new Set(this.reviewQueue.map((i) => i.comment_id));
+            const newItems = incoming.filter((i) => !existingIds.has(i.comment_id));
+            this.reviewQueue = [
+              ...this.reviewQueue.map((item) => {
+                const match = incoming.find((i) => i.comment_id === item.comment_id);
+                return match && match.ad_text ? { ...item, ad_text: match.ad_text } : item;
+              }),
+              ...newItems,
+            ];
+          } else {
+            // 任务完成：用 API 权威数据完整替换
+            this.reviewQueue = incoming;
+          }
+        }
+        // incoming 为空时：无论任何状态都不清空本地队列（防止 SSE 数据丢失）
+
+        if (!isRunning) {
+          this.commentAdsStatus = insights.comment_ads_status || "";
+          this.commentAdsProgress = insights.comment_ads_progress || { done: 0, total: 0 };
+          this.progressStep = insights.progress?.step || this.progressStep;
+          this.progressMetrics = insights.progress?.metrics || this.progressMetrics;
+          this.progressLogs = insights.progress?.logs || [];
+        }
+        const rawKpis = insights.analytics?.kpis;
+        if (rawKpis && !Array.isArray(rawKpis) && typeof rawKpis === 'object') {
+          this.analyticsKpis = rawKpis;
+        }
         this.sentimentBars = insights.analytics?.sentiment_bars || [];
-        this.analyticsTopics = insights.analytics?.topic_cloud || [];
+        const topicWords = insights.analytics?.topic_cloud || [];
+        const topicClasses = [
+          'text-4xl font-black text-primary',
+          'text-3xl font-bold text-secondary',
+          'text-2xl font-semibold text-primary/70',
+          'text-xl text-on-surface-variant',
+          'text-lg text-secondary/70',
+        ];
+        this.analyticsTopics = topicWords.map((w, i) =>
+          typeof w === 'string' ? { word: w, className: topicClasses[i % topicClasses.length] } : w
+        );
         this.analyticsInsight = insights.analytics?.insight || this.analyticsInsight;
         this.lastInsightsSyncedAt = Date.now();
         if (updateReviewState) {
@@ -690,6 +827,99 @@ export default {
       } finally {
         this.isRefreshing = false;
       }
+    },
+    _attachSseStream(taskId) {
+      return new Promise((resolve, reject) => {
+        let reconnectAttempts = 0;
+        const MAX_RECONNECT = 10;
+
+        const connect = () => {
+          streamTaskEvents(
+            taskId,
+            (event) => {
+              reconnectAttempts = 0; // 收到数据说明连接正常，重置计数
+              const now = new Date().toLocaleTimeString();
+              if (event.type === "progress") {
+                this.pollCount += 1;
+                const stageToStep = (pct) => Math.max(1, Math.min(4, Math.ceil(pct / 25)));
+                this.progressStep = {
+                  current: stageToStep(event.percent),
+                  total: 4,
+                  label: event.message,
+                  percent: event.percent,
+                };
+                this.progressLogs = [
+                  `${now} [${event.stage.toUpperCase()}] ${event.message}`,
+                  ...this.progressLogs,
+                ].slice(0, 30);
+              } else if (event.type === "crawl_done") {
+                this.progressMetrics.posts_scanned = event.content_count;
+                this.progressMetrics.comments_read = event.comment_count;
+                this.progressLogs = [
+                  `${now} [CRAWLER] 抓取完成 内容:${event.content_count} 评论:${event.comment_count}`,
+                  ...this.progressLogs,
+                ].slice(0, 30);
+              } else if (event.type === "comment") {
+                this.reviewQueue.push(event.data);
+                this.streamingComments = [event.data, ...this.streamingComments].slice(0, 5);
+              } else if (event.type === "comment_ads_partial") {
+                const ads = event.comment_ads || {};
+                this.reviewQueue = this.reviewQueue.map((item) => {
+                  const ad = ads[item.comment_id];
+                  return ad !== undefined ? { ...item, ad_text: ad } : item;
+                });
+              } else if (event.type === "crawler_log") {
+                this.progressLogs = [
+                  `${now} [CRAWLER] ${event.line}`,
+                  ...this.progressLogs,
+                ].slice(0, 50);
+              } else if (event.type === "agent_result") {
+                const agentLabel = {
+                  vision: "视觉分析", context: "评论语境分析",
+                  rag: "知识库检索", copywriter: "广告文案生成",
+                };
+                this.progressLogs = [
+                  `${now} [AGENT] ${agentLabel[event.agent] || event.agent} 完成`,
+                  ...this.progressLogs,
+                ].slice(0, 30);
+              } else if (event.type === "done") {
+                resolve(null);
+              } else if (event.type === "error") {
+                reject(new Error(event.message));
+              }
+            },
+            async (err) => {
+              // SSE 连接中断：先查任务状态，能重连就重连
+              reconnectAttempts += 1;
+              if (reconnectAttempts > MAX_RECONNECT) {
+                reject(err);
+                return;
+              }
+              const delay = Math.min(5000, reconnectAttempts * 1000);
+              this.progressLogs = [
+                `${new Date().toLocaleTimeString()} [SSE] 连接中断，${delay / 1000}s 后重连(${reconnectAttempts}/${MAX_RECONNECT})...`,
+                ...this.progressLogs,
+              ].slice(0, 30);
+              await new Promise((r) => setTimeout(r, delay));
+              try {
+                const statusData = await getTaskStatus(taskId);
+                const status = String(statusData.status || 'not_found');
+                if (status === 'done') {
+                  resolve(null); // 任务已完成，不用重连
+                } else if (status === 'not_found') {
+                  reject(new Error('任务已丢失（服务重启）'));
+                } else {
+                  connect(); // 任务仍在运行，重连 SSE
+                }
+              } catch {
+                connect(); // 状态查询失败，仍尝试重连
+              }
+            },
+          );
+        };
+
+        connect();
+      });
     },
     _startCommentAdsPolling() {
       if (this.commentAdsPollTimer) return;
@@ -739,67 +969,10 @@ export default {
         if (!this.taskId) {
           throw new Error("后端未返回 task_id");
         }
+        localStorage.setItem('aiad_task_id', this.taskId);
 
         // 用 SSE 替代轮询，实时接收进度和评论
-        await new Promise((resolve, reject) => {
-          streamTaskEvents(
-            this.taskId,
-            (event) => {
-              const now = new Date().toLocaleTimeString();
-              if (event.type === "progress") {
-                this.pollCount += 1;
-                const stageToStep = (pct) => Math.max(1, Math.min(4, Math.ceil(pct / 25)));
-                this.progressStep = {
-                  current: stageToStep(event.percent),
-                  total: 4,
-                  label: event.message,
-                  percent: event.percent,
-                };
-                this.progressLogs = [
-                  `${now} [${event.stage.toUpperCase()}] ${event.message}`,
-                  ...this.progressLogs,
-                ].slice(0, 30);
-              } else if (event.type === "crawl_done") {
-                this.progressMetrics.posts_scanned = event.content_count;
-                this.progressMetrics.comments_read = event.comment_count;
-                this.progressLogs = [
-                  `${now} [CRAWLER] 抓取完成 内容:${event.content_count} 评论:${event.comment_count}`,
-                  ...this.progressLogs,
-                ].slice(0, 30);
-              } else if (event.type === "comment") {
-                // 评论逐条流入：追加到审核队列 + 保留最近 5 条用于进度页预览
-                this.reviewQueue.push(event.data);
-                this.streamingComments = [event.data, ...this.streamingComments].slice(0, 5);
-              } else if (event.type === "comment_ads_partial") {
-                // 每批逐评论文案到达时实时更新审核队列
-                const ads = event.comment_ads || {};
-                this.reviewQueue = this.reviewQueue.map((item) => {
-                  const ad = ads[item.comment_id];
-                  return ad !== undefined ? { ...item, ad_text: ad } : item;
-                });
-              } else if (event.type === "crawler_log") {
-                this.progressLogs = [
-                  `${now} [CRAWLER] ${event.line}`,
-                  ...this.progressLogs,
-                ].slice(0, 50);
-              } else if (event.type === "agent_result") {
-                const agentLabel = {
-                  vision: "视觉分析", context: "评论语境分析",
-                  rag: "知识库检索", copywriter: "广告文案生成",
-                };
-                this.progressLogs = [
-                  `${now} [AGENT] ${agentLabel[event.agent] || event.agent} 完成`,
-                  ...this.progressLogs,
-                ].slice(0, 30);
-              } else if (event.type === "done") {
-                resolve(null);
-              } else if (event.type === "error") {
-                reject(new Error(event.message));
-              }
-            },
-            (err) => reject(err),
-          );
-        });
+        await this._attachSseStream(this.taskId);
 
         const meta = await getTaskMeta(this.taskId);
         this.taskMeta = meta;

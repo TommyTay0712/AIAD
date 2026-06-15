@@ -1,14 +1,62 @@
 from __future__ import annotations
 
+import logging
 from collections import Counter
 
 from app.models.schemas import NLPAnalysis, RawComment
+from app.services.llm_gateway import OpenAICompatibleGateway, _extract_json_payload
+
+logger = logging.getLogger(__name__)
 
 
 class ContextAgent:
-    """评论区语境与情感智能体的启发式实现。"""
+    """评论区语境与情感智能体。优先 LLM 分析，降级为规则提取。"""
+
+    def __init__(self, gateway: OpenAICompatibleGateway | None = None) -> None:
+        self._gateway = gateway
 
     def analyze(self, comments: list[RawComment], product_info: str = "") -> NLPAnalysis:
+        if self._gateway is not None:
+            try:
+                return self._llm_analyze(comments, product_info)
+            except Exception as exc:
+                logger.warning("LLM 分析失败，降级规则分析 error=%s", exc)
+        return self._rule_analyze(comments, product_info)
+
+    def _llm_analyze(self, comments: list[RawComment], product_info: str) -> NLPAnalysis:
+        assert self._gateway is not None
+        comment_texts = "\n".join(
+            f"- {c.content}" for c in comments if c.content.strip()
+        )
+        system_prompt = (
+            "你是一个社交媒体广告营销分析专家。请分析以下评论区内容，"
+            "严格以 JSON 格式输出分析结果，不要有任何额外说明文字。\n"
+            "输出字段：\n"
+            "- main_emotion: 评论区整体情绪（字符串，一句话）\n"
+            "- pain_points: 用户主要痛点（字符串数组，3条以内）\n"
+            "- language_style: 评论区语言风格（字符串，一句话）\n"
+            "- ad_angles: 适合切入的软广角度（字符串数组，3条以内）\n"
+            "- keyword_summary: 高频关键词（字符串数组，6个以内）"
+        )
+        user_prompt = (
+            f"产品信息：{product_info or '未指定'}\n\n"
+            f"评论区样本（共 {len(comments)} 条）：\n{comment_texts}"
+        )
+        raw = self._gateway.chat(system_prompt, user_prompt)
+        if not raw:
+            raise ValueError("LLM 返回空内容")
+        data = _extract_json_payload(raw)
+        if not isinstance(data, dict):
+            raise ValueError(f"LLM 返回非 dict 结构: {type(data)}")
+        return NLPAnalysis(
+            main_emotion=str(data.get("main_emotion", "")),
+            pain_points=list(data.get("pain_points", [])),
+            language_style=str(data.get("language_style", "")),
+            ad_angles=list(data.get("ad_angles", [])),
+            keyword_summary=list(data.get("keyword_summary", [])),
+        )
+
+    def _rule_analyze(self, comments: list[RawComment], product_info: str) -> NLPAnalysis:
         texts = [comment.content.strip() for comment in comments if comment.content.strip()]
         joined_text = " ".join(texts)
         emotion = self._detect_emotion(joined_text)
@@ -91,5 +139,5 @@ class ContextAgent:
         if "谨慎" in emotion:
             angles.append("弱化广告感，优先回答顾虑和避雷点")
         if product_info and not angles:
-            angles.append(f"围绕“{product_info}”的真实体验和适用人群展开")
+            angles.append(f"围绕【{product_info}】的真实体验和适用人群展开")
         return angles or ["优先采用像普通用户回帖的自然安利角度"]

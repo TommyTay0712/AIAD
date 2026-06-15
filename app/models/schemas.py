@@ -23,21 +23,41 @@ class ErrorCode(str, Enum):
 class RunRequest(BaseModel):
     """分析请求入参。"""
 
-    ad_type: str = Field(min_length=1)
-    post_url: str = Field(default="")
-    product_info: str = Field(default="")
-    target_style: str = Field(default="测评风")
-    keywords: list[str] = Field(default_factory=list)
-    platform: str = Field(default="xhs")
+    ad_type: str = Field(min_length=1, max_length=100)
+    post_url: str = Field(default="", max_length=500)
+    product_info: str = Field(default="", max_length=500)
+    target_style: str = Field(default="测评风", max_length=50)
+    keywords: list[str] = Field(default_factory=list, max_length=10)
+    platform: str = Field(default="xhs", max_length=20)
     limit: int = Field(default=20, ge=1, le=200)
     max_comments_per_note: int = Field(default=10, ge=1, le=200)
     enable_media_download: bool = Field(default=False)
-    time_range: str = Field(default="")
+    time_range: str = Field(default="", max_length=50)
 
     @field_validator("keywords")
     @classmethod
     def normalize_keywords(cls, value: list[str]) -> list[str]:
-        return [item.strip() for item in value if item.strip()]
+        import re
+        _KEYWORD_PATTERN = re.compile(r"^[\u4e00-\u9fa5A-Za-z0-9 _\-·，,、]+$")
+        cleaned: list[str] = []
+        for item in value:
+            item = item.strip()
+            if not item:
+                continue
+            if len(item) > 50:
+                raise ValueError(f"关键词过长（最多50字符）: {item[:20]}...")
+            if not _KEYWORD_PATTERN.match(item):
+                raise ValueError(f"关键词包含非法字符: {item[:20]}")
+            cleaned.append(item)
+        return cleaned
+
+    @field_validator("platform")
+    @classmethod
+    def validate_platform(cls, value: str) -> str:
+        allowed = {"xhs", "douyin", "weibo", "bilibili"}
+        if value.strip().lower() not in allowed:
+            raise ValueError(f"不支持的平台: {value}（支持: {', '.join(sorted(allowed))}）")
+        return value.strip().lower()
 
 
 class TaskResponse(BaseModel):

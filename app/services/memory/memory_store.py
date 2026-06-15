@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
+from pathlib import Path
 from typing import Any, cast
 
 import chromadb
@@ -18,6 +20,20 @@ EMBEDDING_MODEL_META_KEY = "agent4_embedding_model"
 EMBEDDING_DIM_META_KEY = "agent4_embedding_dim"
 
 
+def _enable_wal(persist_dir: Path) -> None:
+    """对 ChromaDB 底层 SQLite 启用 WAL 模式，降低多进程并发写冲突概率。"""
+    for name in ("chroma.sqlite3", "chroma.sqlite"):
+        db_file = persist_dir / name
+        if db_file.exists():
+            try:
+                with sqlite3.connect(str(db_file)) as db:
+                    db.execute("PRAGMA journal_mode=WAL")
+                    db.execute("PRAGMA busy_timeout=5000")
+            except Exception as exc:
+                logger.warning("ChromaDB WAL 设置失败 file=%s err=%s", db_file, exc)
+            break
+
+
 class MemoryStore:
     """Agent 4 的 Chroma 持久层。"""
 
@@ -25,6 +41,7 @@ class MemoryStore:
         self.settings = settings
         self.embedder = embedder
         self.client = chromadb.PersistentClient(path=str(settings.persist_dir))
+        _enable_wal(settings.persist_dir)
 
     def _get_collection(self, name: str) -> Collection:
         return self.client.get_or_create_collection(

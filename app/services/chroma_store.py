@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from pathlib import Path
 from typing import Any, cast
 
@@ -11,11 +12,26 @@ from chromadb.api.models.Collection import Collection
 logger = logging.getLogger(__name__)
 
 
+def _enable_wal(persist_dir: Path) -> None:
+    """对 ChromaDB 底层 SQLite 启用 WAL 模式，降低多进程并发写冲突概率。"""
+    for name in ("chroma.sqlite3", "chroma.sqlite"):
+        db_file = persist_dir / name
+        if db_file.exists():
+            try:
+                with sqlite3.connect(str(db_file)) as db:
+                    db.execute("PRAGMA journal_mode=WAL")
+                    db.execute("PRAGMA busy_timeout=5000")
+            except Exception as exc:
+                logger.warning("ChromaDB WAL 设置失败 file=%s err=%s", db_file, exc)
+            break
+
+
 class ChromaStore:
     """ChromaDB 持久化封装。"""
 
     def __init__(self, persist_dir: Path) -> None:
         self.client = chromadb.PersistentClient(path=str(persist_dir))
+        _enable_wal(persist_dir)
 
     def _upsert_rows(self, collection: Collection, rows: list[dict[str, Any]], prefix: str) -> int:
         if not rows:

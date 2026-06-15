@@ -16,6 +16,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from app.core.config import Settings, get_settings
+from app.core.security import check_agent_rate, check_global_rate, check_run_rate, verify_api_key
 from app.models.schemas import (
     AdDraft,
     AnalyzeOutput,
@@ -207,6 +208,22 @@ def _run_pipeline_task(
     event_q: stdlib_queue.Queue | None = getattr(app_state, "task_event_queues", {}).get(task_id)
 
     def emit(event: dict[str, Any]) -> None:
+        # 检测爬虫保存二维码的标记行，读取图片并向前端推送 qrcode 事件
+        if event.get("type") == "crawler_log":
+            line: str = event.get("line", "")
+            if line.startswith("[AIAD_QRCODE_SAVED]"):
+                qrcode_path = line[len("[AIAD_QRCODE_SAVED]"):].strip()
+                try:
+                    import base64 as _b64
+                    with open(qrcode_path, "rb") as fh:
+                        b64 = _b64.b64encode(fh.read()).decode()
+                    if event_q is not None:
+                        try:
+                            event_q.put_nowait({"type": "qrcode", "image_b64": b64})
+                        except Exception:
+                            pass
+                except Exception as _exc:
+                    logger.warning("读取二维码文件失败 path=%s error=%s", qrcode_path, _exc)
         if event_q is not None:
             try:
                 event_q.put_nowait(event)
@@ -409,10 +426,8 @@ def _run_pipeline_task(
             llm_gateway=build_llm_gateway(settings),
             emit_fn=emit,
         )
-        chroma_counts = ChromaStore(settings.chroma_persist_dir).write_task_payload(
-            task_id,
-            final_payload,
-        )
+        chroma_store: ChromaStore = app_state.chroma_store
+        chroma_counts = chroma_store.write_task_payload(task_id, final_payload)
         processed_path = settings.processed_output_dir / f"{task_id}_normalized.json"
         processed_path.write_text(
             json.dumps(final_payload, ensure_ascii=False, indent=2),
@@ -460,9 +475,9 @@ def _run_pipeline_task(
         if record:
             record.status = TaskStatus.FAILED
             record.error_code = ErrorCode.INTERNAL_ERROR
-            record.error_message = str(exc)[:1000]
+            record.error_message = str(exc)[:1000]  # 内部日志保留完整错误
             task_store.upsert(record)
-        emit({"type": "error", "message": str(exc)[:200]})
+        emit({"type": "error", "message": "任务执行异常，请稍后重试"})
 
 
 def _load_task_payload(task_id: str, task_store: TaskStore) -> tuple[TaskRecord, dict[str, Any]]:
@@ -697,6 +712,8 @@ def run_analysis(
     background_tasks: BackgroundTasks,
     settings: Settings = Depends(get_settings),
     task_store: TaskStore = Depends(_task_store),
+    _auth: str | None = Depends(verify_api_key),
+    _rate: None = Depends(check_run_rate),
 ) -> TaskResponse:
     """执行广告分析任务。"""
     if not payload.ad_type.strip():
@@ -704,11 +721,21 @@ def run_analysis(
             status_code=422,
             detail={"error_code": ErrorCode.INVALID_INPUT.value, "message": "ad_type不能为空"},
         )
-    task_id = uuid4().hex[:12]
+    task_id = uuid4().hex
 
-    # 提前创建 SSE 事件队列，确保后台任务启动时队列已就绪
-    event_q: stdlib_queue.Queue = stdlib_queue.Queue()
+    # SEC-10: 提前创建有界 SSE 事件队列 + 清理过期队列
+    import time as _time
+    _now = _time.time()
+    # 清理超过 30 分钟未消费的过期队列，防止内存泄漏
+    _created_map: dict[str, float] = getattr(request.app.state, "task_event_queue_created", {})
+    stale_ids = [tid for tid, ts in _created_map.items() if _now - ts > 1800]
+    for stale_id in stale_ids:
+        request.app.state.task_event_queues.pop(stale_id, None)
+        _created_map.pop(stale_id, None)
+
+    event_q: stdlib_queue.Queue = stdlib_queue.Queue(maxsize=2000)
     request.app.state.task_event_queues[task_id] = event_q
+    _created_map[task_id] = _now
 
     record = TaskRecord(
         task_id=task_id,
@@ -851,7 +878,8 @@ def get_task_meta(
         "status": record.status,
         "error_code": record.error_code,
         "message": record.error_message,
-        "processed_file": result.get("processed_file", ""),
+        # SEC-07: 不向客户端泄露服务器内部文件路径
+        "has_processed_file": bool(result.get("processed_file", "")),
         "chroma_counts": result.get("chroma_counts", {}),
         "vision_analysis": result.get("vision_analysis", {}),
         "params": record.params,
@@ -930,25 +958,39 @@ def get_agent_state_schema() -> GlobalAgentState:
 def run_vision_agent(
     payload: VisionRunRequest,
     settings: Settings = Depends(get_settings),
+    _auth: str | None = Depends(verify_api_key),
+    _rate: None = Depends(check_agent_rate),
 ) -> VisionAnalysis:
     """单独执行 Agent2 视觉分析。"""
     return VisionAgent(settings).analyze(payload.media_paths)
 
 
 @router.post("/agents/context/run", response_model=NLPAnalysis)
-def run_context_agent(payload: ContextRunRequest) -> NLPAnalysis:
+def run_context_agent(
+    payload: ContextRunRequest,
+    _auth: str | None = Depends(verify_api_key),
+    _rate: None = Depends(check_agent_rate),
+) -> NLPAnalysis:
     """单独执行 Agent3 评论区语境分析。"""
     return ContextAgent().analyze(payload.comments, payload.product_info)
 
 
 @router.post("/agents/rag/run", response_model=list[str])
-def run_rag_agent(payload: RagRunRequest) -> list[str]:
+def run_rag_agent(
+    payload: RagRunRequest,
+    _auth: str | None = Depends(verify_api_key),
+    _rate: None = Depends(check_agent_rate),
+) -> list[str]:
     """单独执行 Agent4 检索接口。"""
     return RagAgent().retrieve(payload.vision_analysis, payload.nlp_analysis, payload.top_k)
 
 
 @router.post("/agents/copywriter/run", response_model=list[AdDraft])
-def run_copywriter_agent(payload: CopywriterRunRequest) -> list[AdDraft]:
+def run_copywriter_agent(
+    payload: CopywriterRunRequest,
+    _auth: str | None = Depends(verify_api_key),
+    _rate: None = Depends(check_agent_rate),
+) -> list[AdDraft]:
     """单独执行 Agent5 文案生成接口。"""
     return CopywriterAgent().generate(
         payload.request_info,

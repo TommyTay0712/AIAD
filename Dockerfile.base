@@ -1,0 +1,7 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# 先安装系统依赖（如果有的话，如 gcc, g++ 等，但根据要求只复制 requirements）
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt

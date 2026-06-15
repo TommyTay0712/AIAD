@@ -1,70 +1,138 @@
 from __future__ import annotations
 
 import json
-import threading
+import logging
+import sqlite3
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from app.models.schemas import TaskRecord
+from app.models.schemas import ErrorCode, TaskRecord, TaskStatus
+
+logger = logging.getLogger(__name__)
+
+_CREATE_TABLE = """
+CREATE TABLE IF NOT EXISTS tasks (
+    task_id       TEXT PRIMARY KEY,
+    status        TEXT NOT NULL,
+    params        TEXT NOT NULL DEFAULT '{}',
+    result        TEXT NOT NULL DEFAULT '{}',
+    output_files  TEXT NOT NULL DEFAULT '{}',
+    error_code    TEXT,
+    error_message TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+)
+"""
+
+# ON CONFLICT: 保留 created_at（不在 DO UPDATE SET 中），只更新其余字段
+_UPSERT = """
+INSERT INTO tasks
+    (task_id, status, params, result, output_files,
+     error_code, error_message, created_at, updated_at)
+VALUES
+    (:task_id, :status, :params, :result, :output_files,
+     :error_code, :error_message, :created_at, :updated_at)
+ON CONFLICT(task_id) DO UPDATE SET
+    status        = excluded.status,
+    params        = excluded.params,
+    result        = excluded.result,
+    output_files  = excluded.output_files,
+    error_code    = excluded.error_code,
+    error_message = excluded.error_message,
+    updated_at    = excluded.updated_at
+"""
 
 
 class TaskStore:
-    """基于JSON文件的任务追踪存储。"""
-
-    # 类级别锁：所有实例共享，保护同一 JSON 文件的并发读写
-    _lock: threading.Lock = threading.Lock()
+    """基于 SQLite WAL 的任务追踪存储，跨进程安全（支持 --workers N）。"""
 
     def __init__(self, store_file: Path) -> None:
-        self.store_file = store_file
+        # 兼容旧 .json 路径：统一转为 .db 扩展名
+        self.db_path = store_file.with_suffix(".db")
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_db()
 
-    def _read_all(self) -> dict[str, dict]:
-        content = self.store_file.read_text(encoding="utf-8").strip()
-        if not content:
-            return {}
-        return json.loads(content)
+    @contextmanager
+    def _conn(self) -> Generator[sqlite3.Connection, None, None]:
+        conn = sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=10)
+        conn.row_factory = sqlite3.Row
+        # WAL 模式：多进程并发读写安全；busy_timeout 避免 SQLITE_BUSY 立即报错
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
-    def _write_all(self, payload: dict[str, dict]) -> None:
-        self.store_file.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+    def _init_db(self) -> None:
+        with self._conn() as conn:
+            conn.execute(_CREATE_TABLE)
+
+    @staticmethod
+    def _to_row(record: TaskRecord) -> dict[str, Any]:
+        now = datetime.now().isoformat()
+        return {
+            "task_id": record.task_id,
+            "status": record.status.value,
+            "params": json.dumps(record.params, ensure_ascii=False),
+            "result": json.dumps(record.result, ensure_ascii=False),
+            "output_files": json.dumps(record.output_files, ensure_ascii=False),
+            "error_code": record.error_code.value if record.error_code else None,
+            "error_message": record.error_message,
+            "created_at": now,   # 仅在 INSERT 时写入；UPSERT 不更新此字段
+            "updated_at": now,
+        }
+
+    @staticmethod
+    def _from_row(row: sqlite3.Row) -> TaskRecord:
+        d = dict(row)
+        d["params"] = json.loads(d["params"])
+        d["result"] = json.loads(d["result"])
+        d["output_files"] = json.loads(d["output_files"])
+        return TaskRecord.model_validate(d)
 
     def upsert(self, record: TaskRecord) -> TaskRecord:
-        with self._lock:
-            payload = self._read_all()
-            now = datetime.now().isoformat()
-            data = record.model_dump(mode="json")
-            data["updated_at"] = now
-            if record.task_id not in payload:
-                data["created_at"] = now
-            else:
-                data["created_at"] = payload[record.task_id]["created_at"]
-            payload[record.task_id] = data
-            self._write_all(payload)
-            return TaskRecord.model_validate(payload[record.task_id])
+        with self._conn() as conn:
+            conn.execute(_UPSERT, self._to_row(record))
+            row = conn.execute(
+                "SELECT * FROM tasks WHERE task_id=?", (record.task_id,)
+            ).fetchone()
+        return self._from_row(row)
 
     def get(self, task_id: str) -> TaskRecord | None:
-        payload = self._read_all()
-        raw = payload.get(task_id)
-        if not raw:
-            return None
-        return TaskRecord.model_validate(raw)
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM tasks WHERE task_id=?", (task_id,)
+            ).fetchone()
+        return self._from_row(row) if row else None
 
     def patch_result(self, task_id: str, updates: dict[str, Any]) -> None:
-        """原子性地合并更新单条任务的 result 字段（部分更新，不覆盖其他字段）。"""
-        with self._lock:
-            payload = self._read_all()
-            if task_id not in payload:
+        """在单个 SQLite 事务内原子合并 result 字段，无跨进程读-改-写竞态。"""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT result FROM tasks WHERE task_id=?", (task_id,)
+            ).fetchone()
+            if not row:
                 return
-            existing_result: dict[str, Any] = payload[task_id].get("result") or {}
-            existing_result.update(updates)
-            payload[task_id]["result"] = existing_result
-            payload[task_id]["updated_at"] = datetime.now().isoformat()
-            self._write_all(payload)
+            existing: dict[str, Any] = json.loads(row["result"])
+            existing.update(updates)
+            conn.execute(
+                "UPDATE tasks SET result=?, updated_at=? WHERE task_id=?",
+                (json.dumps(existing, ensure_ascii=False), datetime.now().isoformat(), task_id),
+            )
 
     def list_recent(self, limit: int = 10) -> list[TaskRecord]:
-        payload = self._read_all()
-        records = [TaskRecord.model_validate(item) for item in payload.values()]
-        records.sort(key=lambda record: record.updated_at, reverse=True)
-        return records[: max(1, limit)]
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM tasks ORDER BY updated_at DESC LIMIT ?",
+                (max(1, limit),),
+            ).fetchall()
+        return [self._from_row(r) for r in rows]

@@ -1,0 +1,140 @@
+# ============================================================
+# AIAD 微服务编排 — Docker Compose
+# ============================================================
+# 启动：docker-compose up --build
+# 单个服务：docker-compose up gateway
+# 停止：docker-compose down
+# ============================================================
+
+services:
+  # ---------- 基础设施 ----------
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ---------- Nginx (Static & Reverse Proxy) ----------
+
+  nginx:
+    build:
+      context: .
+      dockerfile: services/nginx/Dockerfile
+    ports:
+      - "8000:8000"
+    depends_on:
+      - gateway
+
+  # ---------- API Gateway ----------
+
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    # 取消对外映射 8000 端口，仅由 Nginx 内部反向代理访问
+    expose:
+      - "8080"
+    env_file:
+      - .env
+    environment:
+      - SERVICE_PORT=8080
+      - REDIS_URL=redis://redis:6379/0
+      - TASK_SERVICE_URL=http://task:8001
+      - CRAWLER_SERVICE_URL=http://host.docker.internal:8002
+      - ANALYSIS_SERVICE_URL=http://analysis:8003
+      - COPYWRITER_SERVICE_URL=http://copywriter:8004
+    depends_on:
+      redis:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ---------- Task Service ----------
+
+  task:
+    build:
+      context: .
+      dockerfile: services/task/Dockerfile
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      - SERVICE_PORT=8001
+      - REDIS_URL=redis://redis:6379/0
+      # Crawler 运行在宿主机，Docker 通过 host.docker.internal 访问
+      - CRAWLER_SERVICE_URL=http://host.docker.internal:8002
+      - ANALYSIS_SERVICE_URL=http://analysis:8003
+      - COPYWRITER_SERVICE_URL=http://copywriter:8004
+    depends_on:
+      redis:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ---------- Crawler Service（本机运行，不在 Docker 内）----------
+  # 启动命令：E:\AIAD\.conda\aiad\python.exe -m uvicorn services.crawler.main:app --host 0.0.0.0 --port 8002
+  #
+  # crawler:
+  #   build:
+  #     context: .
+  #     dockerfile: services/crawler/Dockerfile
+  #   ports:
+  #     - "8002:8002"
+  #   env_file:
+  #     - .env
+  #   environment:
+  #     - SERVICE_PORT=8002
+  #     - REDIS_URL=redis://redis:6379/0
+  #     - MEDIACRAWLER_PYTHON_EXE=python3
+  #     - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+  #     - HEADLESS_BROWSER=true
+  #     - CRAWLER_SUBPROCESS_TIMEOUT=480
+  #   mem_limit: 2g
+  #   memswap_limit: 2g
+  #   volumes:
+  #     - ./data:/app/data
+  #     - ./vendor/MediaCrawler:/app/vendor/MediaCrawler
+  #     - ./.ms-playwright:/app/.ms-playwright
+
+  # ---------- Analysis Service ----------
+
+  analysis:
+    build:
+      context: .
+      dockerfile: services/analysis/Dockerfile
+    ports:
+      - "8003:8003"
+    env_file:
+      - .env
+    environment:
+      - SERVICE_PORT=8003
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./data/chroma:/app/data/chroma
+      - ./.model_cache:/app/.model_cache
+
+  # ---------- Copywriter Service ----------
+
+  copywriter:
+    build:
+      context: .
+      dockerfile: services/copywriter/Dockerfile
+    ports:
+      - "8004:8004"
+    env_file:
+      - .env
+    environment:
+      - SERVICE_PORT=8004
+      - REDIS_URL=redis://redis:6379/0
+
+volumes:
+  redis_data:

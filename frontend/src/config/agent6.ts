@@ -6,7 +6,8 @@ export const AGENT6_CONFIG = {
 
 export const AGENT6_ENDPOINTS = {
     run: '/run',
-    taskStatus: (taskId: string) => `/task/${taskId}`,
+    taskStatus: (taskId: string) => `/task/${taskId}/status`,
+    taskPartial: (taskId: string) => `/task/${taskId}/partial`,
     taskMeta: (taskId: string) => `/task/${taskId}/meta`,
     taskInsights: (taskId: string) => `/task/${taskId}/insights`,
     taskStream: (taskId: string) => `/task/${taskId}/stream`,
