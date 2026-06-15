@@ -521,8 +521,16 @@ export default {
           const partial = await getTaskPartial(saved);
           const comments = Array.isArray(partial.comments) ? partial.comments : [];
           const commentAds = partial.comment_ads || {};
-          const affinityFromLikes = (likes) =>
-            likes <= 0 ? 70 : Math.min(95, 70 + Math.floor(Math.log10(likes + 1) * 10));
+          // 与后端 _affinity_score 保持一致：点赞+内容长度+意图标记副信号
+          const affinityFromContent = (c) => {
+            const content = String(c.content || '');
+            const likes = Number(c.liked_count || c.likes || 0);
+            const likeScore = likes > 0 ? Math.min(18, Math.floor(Math.log10(likes + 1) * 10)) : 0;
+            const n = content.trim().length;
+            const lenScore = n >= 80 ? 8 : n >= 40 ? 5 : n >= 15 ? 2 : 0;
+            const intentScore = /[?？!！]/.test(content) ? 2 : 0;
+            return Math.min(95, 70 + likeScore + lenScore + intentScore);
+          };
           this.reviewQueue = comments
             .map((c, i) => {
               if (!c || !c.content) return null;
@@ -535,7 +543,7 @@ export default {
                 note_id: String(c.note_id || ''),
                 ad_text: String(commentAds[String(i)] || ''),
                 focus: '',
-                predicted_affinity: affinityFromLikes(likes),
+                predicted_affinity: affinityFromContent(c),
                 platform: '小红书',
               };
             })
@@ -545,6 +553,8 @@ export default {
             this.reviewSyncStatus = 'success';
             this.reviewSyncMessage = `已恢复 ${this.reviewQueue.length} 条评论，继续等待文案生成...`;
             this.lastInsightsSyncedAt = Date.now();
+            // 立即拉取实时看板数据（后端 partial 快照现在包含 nlp_analysis）
+            this.loadInsights({ updateReviewState: false }).catch(() => {});
           }
         } catch (_e) {
           // 快照拉取失败不影响重连，继续走 SSE
