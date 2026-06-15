@@ -13,8 +13,11 @@ import asyncio
 import json
 import logging
 import math
+import os
 import queue as stdlib_queue
 import time
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -25,6 +28,23 @@ from fastapi.responses import StreamingResponse
 from services.shared.config import load_service_config
 from services.shared.schemas import HealthResponse
 
+# 任务持久化（复用 app/ 中已有的 TaskStore + TaskRecord）
+try:
+    from app.services.task_store import TaskStore as _TaskStore
+    from app.models.schemas import TaskRecord as _TaskRecord
+    from app.models.schemas import TaskStatus as _TaskStatus
+    _TASK_DB_PATH = Path(
+        os.getenv("TASK_STORE_FILE") or
+        str(Path(__file__).resolve().parents[2] / "data" / "tasks.db")
+    )
+    _DB_OK = True
+except ImportError:
+    _DB_OK = False
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 config = load_service_config("task")
@@ -61,6 +81,23 @@ def _affinity_score(comment: dict[str, Any]) -> int:
 @app.get("/health", response_model=HealthResponse)
 async def health_check() -> HealthResponse:
     return HealthResponse(service="task")
+
+
+@app.on_event("startup")
+async def _restore_tasks_from_db() -> None:
+    """容器启动时从 SQLite 恢复已完成任务，使容器重启后历史结果不丢失。"""
+    if not _DB_OK:
+        return
+    try:
+        store = _TaskStore(_TASK_DB_PATH)
+        restored = 0
+        for record in store.list_recent(50):
+            if record.status == _TaskStatus.SUCCESS and record.result:
+                _task_results[record.task_id] = record.result
+                restored += 1
+        logger.info("从 SQLite 恢复了 %d 个已完成任务", restored)
+    except Exception as exc:
+        logger.warning("恢复历史任务失败（不影响服务启动）: %s", exc)
 
 
 async def _stream_crawler_logs(task_id: str, emit: Any) -> None:
@@ -329,11 +366,39 @@ async def _run_pipeline_async(task_id: str, payload: dict[str, Any]) -> None:
             "rag_references": analysis_result.get("rag_references", []),
             "comments": all_comments,
         }
+        # 持久化最终结果到 SQLite
+        if _DB_OK:
+            try:
+                _TaskStore(_TASK_DB_PATH).upsert(_TaskRecord(
+                    task_id=task_id,
+                    status=_TaskStatus.SUCCESS,
+                    params=payload,
+                    result=_task_results[task_id],
+                    created_at=datetime.now(),
+                    updated_at=datetime.now(),
+                ))
+                logger.info("任务结果已持久化 task_id=%s", task_id)
+            except Exception as db_exc:
+                logger.warning("持久化任务结果失败（不影响结果可用性）: %s", db_exc)
+
         emit({"type": "done", "task_id": task_id})
         logger.info("任务管道完成 task_id=%s comments=%s", task_id, len(all_comments))
 
     except Exception as exc:
         logger.error("任务管道异常 task_id=%s error=%s", task_id, exc)
+        if _DB_OK:
+            try:
+                _TaskStore(_TASK_DB_PATH).upsert(_TaskRecord(
+                    task_id=task_id,
+                    status=_TaskStatus.FAILED,
+                    params=payload,
+                    result={},
+                    error_message=str(exc)[:500],
+                    created_at=datetime.now(),
+                    updated_at=datetime.now(),
+                ))
+            except Exception:
+                pass
         emit({"type": "error", "message": "任务执行异常，请稍后重试"})
     finally:
         log_task.cancel()
@@ -377,6 +442,21 @@ def run_analysis(
     _event_queue_created[task_id] = now
 
     background_tasks.add_task(_run_pipeline_async, task_id, payload)
+
+    # 持久化 running 记录（任务启动时写入，后续由 pipeline 更新为 success/failed）
+    if _DB_OK:
+        try:
+            _TaskStore(_TASK_DB_PATH).upsert(_TaskRecord(
+                task_id=task_id,
+                status=_TaskStatus.RUNNING,
+                params=payload,
+                result={},
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            ))
+        except Exception as exc:
+            logger.warning("写入 running 任务记录失败: %s", exc)
+
     return {"task_id": task_id, "status": "running", "message": "任务已提交"}
 
 
@@ -384,6 +464,36 @@ def run_analysis(
 def get_task_meta(task_id: str) -> dict[str, Any]:
     """返回任务最终结果（pipeline 完成后可用）。"""
     return _task_results.get(task_id, {"task_id": task_id, "status": "pending"})
+
+
+@router.get("/tasks")
+def list_tasks() -> list[dict[str, Any]]:
+    """返回最近 30 条任务列表（历史记录），从 SQLite 读取，容器重启后仍可用。"""
+    if not _DB_OK:
+        # 降级：仅返回当前内存中的任务（无统计，无 params）
+        return [
+            {"task_id": tid, "status": "success", "created_at": "", "params": {}, "stats": {}}
+            for tid in list(_task_results)[-30:]
+        ]
+    try:
+        records = _TaskStore(_TASK_DB_PATH).list_recent(30)
+        result: list[dict[str, Any]] = []
+        for r in records:
+            res = r.result or {}
+            result.append({
+                "task_id": r.task_id,
+                "status": r.status.value,
+                "created_at": r.created_at.isoformat(),
+                "params": r.params,
+                "stats": {
+                    "comment_count": len(res.get("comments", [])),
+                    "final_ads_count": len(res.get("final_ads", [])),
+                },
+            })
+        return result
+    except Exception as exc:
+        logger.warning("获取任务列表失败: %s", exc)
+        return []
 
 
 @router.get("/task/{task_id}/insights")

@@ -99,6 +99,26 @@ export type RunTaskPayload = {
     time_range: string
 }
 
+export type TaskHistoryItem = {
+    task_id: string
+    status: 'running' | 'success' | 'failed'
+    created_at: string
+    params: {
+        ad_type?: string
+        keywords?: string[]
+        platform?: string
+        limit?: number
+    }
+    stats: {
+        comment_count?: number
+        final_ads_count?: number
+    }
+}
+
+export async function listTasks(): Promise<TaskHistoryItem[]> {
+    return requestJson<TaskHistoryItem[]>(AGENT6_ENDPOINTS.tasksList)
+}
+
 export async function submitTask(payload: RunTaskPayload) {
     return requestJson<{ task_id?: string } & Record<string, unknown>>(AGENT6_ENDPOINTS.run, {
         method: 'POST',

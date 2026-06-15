@@ -12,6 +12,33 @@
             <span>{{ nav.label }}</span>
           </button>
         </nav>
+        <!-- 历史任务列表 -->
+        <div class="px-4 mt-4 flex-1 overflow-hidden flex flex-col" v-if="taskHistory.length > 0">
+          <div class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant/50 px-2 mb-2">历史任务</div>
+          <div class="space-y-1 overflow-y-auto flex-1">
+            <button
+              v-for="t in taskHistory"
+              :key="t.task_id"
+              @click="loadHistoricalTask(t)"
+              class="w-full text-left px-3 py-2 rounded-xl text-xs transition-all duration-150"
+              :class="t.task_id === taskId
+                ? 'bg-white/70 text-blue-800 font-bold shadow-sm'
+                : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'"
+            >
+              <div class="font-semibold truncate leading-snug">
+                {{ t.params.ad_type || (t.params.keywords && t.params.keywords[0]) || '未命名任务' }}
+              </div>
+              <div class="flex items-center gap-2 mt-0.5 opacity-70">
+                <span>{{ formatTaskDate(t.created_at) }}</span>
+                <span v-if="t.stats && t.stats.comment_count" class="text-blue-500 font-semibold">{{ t.stats.comment_count }}条</span>
+                <span v-if="t.status === 'success'" class="text-green-500">✓</span>
+                <span v-else-if="t.status === 'running'" class="text-amber-500">⏳</span>
+                <span v-else-if="t.status === 'failed'" class="text-red-400">✗</span>
+              </div>
+            </button>
+          </div>
+        </div>
+
         <div class="p-4 mt-auto space-y-2">
           <button class="w-full signature-gradient text-white py-3 rounded-xl font-semibold flex items-center justify-center gap-2" @click="startNewCampaign">
             <span class="material-symbols-outlined text-sm">add</span>
@@ -413,6 +440,7 @@ import {
   getTaskMeta,
   getTaskPartial,
   getTaskStatus,
+  listTasks,
   streamTaskEvents,
   submitTask,
   toUserErrorMessage,
@@ -473,6 +501,7 @@ export default {
       lastInsightsSyncedAt: 0,
       reviewSyncStatus: "idle", // idle | refreshing | success | error
       reviewSyncMessage: "点击“刷新评论”可重新拉取后端最新评论。",
+      taskHistory: [],        // 历史任务列表（从 SQLite 加载）
       mockAnalytics: {
         kpis: { comment_count: 1247, content_count: 23, dispatch_efficiency: 78, completed_tasks: 3 },
         topics: ['护肤', '成分党', '敏感肌', '控油', '美白', '防晒', '精华', '面膜', '水乳', 'A醇', '玻尿酸', '抗老'],
@@ -591,6 +620,8 @@ export default {
         this.reviewSyncMessage = `已恢复上次任务，共 ${this.reviewQueue.length} 条评论。`;
       }
     }
+    // 加载历史任务列表（不阻塞主流程）
+    this.fetchTaskHistory();
   },
   beforeUnmount() {
     window.removeEventListener("popstate", this.handlePopState);
@@ -1117,6 +1148,35 @@ export default {
         this.updateElapsed();
         this.isRunning = false;
       }
+      // 任务完成后刷新历史列表
+      this.fetchTaskHistory();
+    },
+    async fetchTaskHistory() {
+      try {
+        this.taskHistory = await listTasks();
+      } catch {
+        // 历史加载失败不影响主功能
+      }
+    },
+    async loadHistoricalTask(t) {
+      if (t.task_id === this.taskId || this.isRunning) return;
+      this.taskId = t.task_id;
+      localStorage.setItem('aiad_task_id', this.taskId);
+      const ok = await this.loadInsights({ updateReviewState: true });
+      if (ok && this.reviewQueue.length > 0) {
+        this.setTaskPhase('success');
+        this.setActiveScreen('review');
+        this.notifySoon(`已切换至历史任务，共 ${this.reviewQueue.length} 条评论`);
+      } else {
+        this.notifySoon('该任务尚无结果数据');
+      }
+    },
+    formatTaskDate(iso) {
+      if (!iso) return '';
+      return new Date(iso).toLocaleString('zh-CN', {
+        month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', hour12: false,
+      });
     },
   },
 }

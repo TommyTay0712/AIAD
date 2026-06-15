@@ -74,6 +74,8 @@ services:
       - CRAWLER_SERVICE_URL=http://host.docker.internal:8002
       - ANALYSIS_SERVICE_URL=http://analysis:8003
       - COPYWRITER_SERVICE_URL=http://copywriter:8004
+    volumes:
+      - ./data:/app/data   # 持久化任务结果到宿主机 data/tasks.db
     depends_on:
       redis:
         condition: service_healthy
